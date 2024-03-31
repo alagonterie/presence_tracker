@@ -79,3 +79,7 @@ fabric.properties
 
 /.idea/misc.xml
 /presence_tracker.db
+/.idea/dataSources.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/.idea/vcs.xml
