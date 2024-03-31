@@ -1,7 +1,7 @@
 from asyncio import sleep, run
 from datetime import datetime, date
 from json import load
-from logging import INFO, getLogger, StreamHandler, Logger, Formatter
+from logging import INFO, DEBUG, getLogger, StreamHandler, Logger, Formatter
 from logging.handlers import TimedRotatingFileHandler
 from os import access, R_OK, makedirs
 from os.path import isfile, exists
@@ -332,11 +332,11 @@ class PresenceTracker:
             makedirs(log_dir)
 
         logger = getLogger(__name__)
-        logger.setLevel(INFO)
+        logger.setLevel(DEBUG)
 
         file_handler = TimedRotatingFileHandler(f"{log_dir}/{_APP_NAME}.log", when="midnight", interval=1)
         file_handler.suffix = "%Y%m%d"
-        file_handler.setLevel(INFO)
+        file_handler.setLevel(DEBUG)
 
         console_handler = StreamHandler()
         console_handler.setLevel(INFO)
@@ -358,6 +358,10 @@ class PresenceTracker:
 
         file_handler.setFormatter(file_formatter)
         console_handler.setFormatter(console_formatter)
+
+        httpx_logger = getLogger('httpx')
+        httpx_logger.setLevel(INFO)
+        httpx_logger.addHandler(file_handler)
 
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
