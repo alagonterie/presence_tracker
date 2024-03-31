@@ -6,7 +6,8 @@ from logging.handlers import TimedRotatingFileHandler
 from os import access, R_OK, makedirs
 from os.path import isfile, exists
 from sys import argv
-from typing import Optional
+from typing import Optional, Callable
+from re import match
 
 # noinspection PyPackageRequirements
 from azure.identity import InteractiveBrowserCredential, TokenCachePersistenceOptions
@@ -41,6 +42,7 @@ class Params:
         self.start_hour = self._DEFAULT_START_HOUR
         self.end_hour = self._DEFAULT_END_HOUR
         self.tracked_user_emails = self._DEFAULT_TRACKED_USER_EMAILS
+        self.tracked_user_email_severity: dict[str, int] = {}
         self._load_params(params_file_path)
 
     def _load_params(self, params_file_path: str) -> None:
@@ -60,7 +62,14 @@ class Params:
         self.ping_seconds = params_dict.get("ping_seconds", self._DEFAULT_PING_SECONDS)
         self.start_hour = params_dict.get("start_hour", self._DEFAULT_START_HOUR)
         self.end_hour = params_dict.get("end_hour", self._DEFAULT_END_HOUR)
-        self.tracked_user_emails = params_dict.get("tracked_user_emails", self._DEFAULT_TRACKED_USER_EMAILS)
+
+        self.tracked_user_emails: list[str] = params_dict.get("tracked_user_emails", self._DEFAULT_TRACKED_USER_EMAILS)
+        self.tracked_user_email_severity = {
+            email.lstrip("+"): self._count_plus_at_start(email)
+            for email in self.tracked_user_emails
+        }
+
+        self.tracked_user_emails = [email for email in self.tracked_user_email_severity.keys()]
 
     def _is_valid_file(self, file_path: str) -> bool:
         if isfile(file_path) and access(file_path, R_OK):
@@ -71,6 +80,14 @@ class Params:
                 f"Default expected: (dir_containing_python_script)/{self._DEFAULT_PARAMS_FILE}"
             )
             return False
+
+    @staticmethod
+    def _count_plus_at_start(mail: str) -> int:
+        m = match(r'^(\+*)', mail)
+        if m:
+            return len(m.group())
+        else:
+            return 0
 
 
 db = SqliteDatabase(f"{_APP_NAME}.db")
@@ -181,6 +198,12 @@ class PresenceTracker:
     def __init__(self):
         self.params = Params()
         self.logger = self.configure_logger()
+        self._log_severities = {
+            0: self.logger.info,
+            1: self.logger.warning,
+            2: self.logger.error,
+            3: self.logger.critical
+        }
         self.graph_client = self._initialize_graph_client(self.params)
         Repository.init_db()
 
@@ -200,6 +223,7 @@ class PresenceTracker:
             while datetime.now() < start_dt:
                 await sleep(1)
 
+        self.logger.info("Presence tracker started")
         await self._track_until_scheduled_end_time_async(end_dt)
 
         self._end_of_scheduled_time_cleanup(end_dt)
@@ -283,7 +307,11 @@ class PresenceTracker:
                 )
 
     def _track_individual_user(self, presence: Presence, dt_initial: Optional[datetime]) -> None:
-        display_name = Repository.get_user(presence.id).display_name
+        db_user = Repository.get_user(presence.id)
+        display_name, email = db_user.display_name, db_user.mail
+        severity = self.params.tracked_user_email_severity[email]
+
+        log_func = self._log_severities.get(min(severity, max(self._log_severities.keys())))
         availability, user_id = presence.availability, presence.id
         dt_now = dt_initial if dt_initial is not None else datetime.now()
 
@@ -292,23 +320,21 @@ class PresenceTracker:
             if last_presence is None or last_presence.end_time is not None:
                 Repository.add_presence(user_id, dt_now, None, 0)
                 if not dt_initial:
-                    self.logger.info(f"{display_name} went {availability.lower()} at {self._format_time(dt_now)}")
+                    log_func(f"{display_name} went {availability.lower()} at {self._format_time(dt_now)}")
         else:
-            self._handle_user_becoming_available(user_id, dt_now)
+            self._handle_user_becoming_available(user_id, dt_now, log_func)
 
-    def _handle_user_becoming_available(self, user_id: str, dt_available: datetime) -> None:
+    def _handle_user_becoming_available(self, user_id: str, dt_available: datetime, log: Callable) -> None:
         last_presence = Repository.get_last_presence(user_id)
 
         if last_presence is not None and last_presence.start_time is not None and last_presence.end_time is None:
-            self._end_unavailability_presence(user_id, last_presence.start_time, dt_available)
+            self._end_unavailability_presence(user_id, last_presence.start_time, dt_available, log)
 
-    def _end_unavailability_presence(self, user_id: str, dt_start: datetime, dt_end: datetime) -> None:
+    def _end_unavailability_presence(self, user_id: str, dt_start: datetime, dt_end: datetime, log: Callable) -> None:
         str_start, str_end = self._format_time(dt_start), self._format_time(dt_end)
 
         if str_start != str_end:
-            self.logger.info(
-                f"{Repository.get_user(user_id).display_name} was unavailable from {str_start} to {str_end}"
-            )
+            log(f"{Repository.get_user(user_id).display_name} was unavailable from {str_start} to {str_end}")
 
         duration_seconds = int((dt_end - dt_start).total_seconds())
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
