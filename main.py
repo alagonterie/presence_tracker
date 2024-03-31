@@ -145,6 +145,18 @@ class Repository:
         return DbUser.select().where(DbUser.mail.in_(emails))
 
     @staticmethod
+    def delete_incomplete_presence_records() -> int:
+        return DbPresence.delete().where(DbPresence.start_time.is_null()).execute()
+
+    @staticmethod
+    def set_end_time_to_now_for_incomplete_records() -> int:
+        now = datetime.now()
+        query = DbPresence.update(end_time=now).where(
+            (~(DbPresence.start_time.is_null())) & (DbPresence.end_time.is_null())
+        )
+        return query.execute()
+
+    @staticmethod
     def get_user_availability(user_mails: list[str], start_dt: datetime, end_dt: datetime):
         result = (
             DbUser.select(DbUser, fn.COALESCE(fn.SUM(DbPresence.duration_seconds), 0).alias('total_seconds'))
@@ -163,10 +175,16 @@ class Repository:
 
 
 class PresenceTracker:
-    def __init__(self) -> None:
+    def __init__(self):
         self.params = Params()
         self.graph_client = self._initialize_graph_client(self.params)
         Repository.init_db()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.cleanup_async()
 
     async def track_async(self) -> None:
         await self._populate_tracked_users_async()
@@ -288,16 +306,31 @@ class PresenceTracker:
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 
     @staticmethod
+    async def cleanup_async():
+        deleted_records = Repository.delete_incomplete_presence_records()
+        updated_records = Repository.set_end_time_to_now_for_incomplete_records()
+
+        if deleted_records > 0:
+            print(f"Cleanup: deleted {deleted_records} presence record(s) with no start time")
+
+        if updated_records > 0:
+            print(f"Cleanup: updated end time to now for {updated_records} presence record(s) with missing end time")
+
+    @staticmethod
     def _initialize_graph_client(params: Params) -> GraphServiceClient:
+        read_presence_scope = "Presence.Read"
+        credentials = InteractiveBrowserCredential(
+            client_id=params.azure_client_id,
+            authority=params.authority,
+            login_hint=params.login_username,
+            cache_persistence_options=TokenCachePersistenceOptions()
+        )
+        credentials.get_token(read_presence_scope)
+
         # noinspection PyTypeChecker
         return GraphServiceClient(
-            credentials=InteractiveBrowserCredential(
-                client_id=params.azure_client_id,
-                authority=params.authority,
-                login_hint=params.login_username,
-                cache_persistence_options=TokenCachePersistenceOptions()
-            ),
-            scopes=["Presence.Read"]
+            credentials=credentials,
+            scopes=[read_presence_scope]
         )
 
     @staticmethod
@@ -312,9 +345,17 @@ class PresenceTracker:
         return dt.strftime('%I:%M:%S%p').lstrip('0').lower()  # test
 
 
-def main() -> None:
-    run(PresenceTracker().track_async())
+async def main():
+    async with PresenceTracker() as tracker:
+        try:
+            await tracker.track_async()
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        except BaseException:
+            print(f"Script cancelled")
+        finally:
+            await tracker.cleanup_async()
 
 
 if __name__ == '__main__':
-    main()
+    run(main())
