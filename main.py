@@ -1,14 +1,16 @@
 from asyncio import sleep, run
 from datetime import datetime, date
 from json import load
-from logging import basicConfig, INFO
-from os import access, R_OK
-from os.path import isfile
+from logging import INFO, getLogger, StreamHandler, Logger, Formatter
+from logging.handlers import TimedRotatingFileHandler
+from os import access, R_OK, makedirs
+from os.path import isfile, exists
 from sys import argv
 from typing import Optional
 
 # noinspection PyPackageRequirements
 from azure.identity import InteractiveBrowserCredential, TokenCachePersistenceOptions
+from colorlog import ColoredFormatter
 from msgraph import GraphServiceClient
 from msgraph.generated.communications.get_presences_by_user_id.get_presences_by_user_id_post_request_body import \
     GetPresencesByUserIdPostRequestBody
@@ -17,7 +19,7 @@ from msgraph.generated.users.users_request_builder import UsersRequestBuilder
 from peewee import Model, CharField, SqliteDatabase, ForeignKeyField, DateTimeField, SQL, fn, DoesNotExist, \
     IntegerField, JOIN
 
-basicConfig(level=INFO)
+_APP_NAME = "presence_tracker"
 
 
 class Params:
@@ -71,7 +73,7 @@ class Params:
             return False
 
 
-db = SqliteDatabase('presence_tracker.db')
+db = SqliteDatabase(f"{_APP_NAME}.db")
 
 
 class DbBase(Model):
@@ -87,7 +89,7 @@ class DbUser(DbBase):
 
 
 class DbPresence(DbBase):
-    user = ForeignKeyField(DbUser, backref='presences')
+    user = ForeignKeyField(DbUser, backref="presences")
     start_time = DateTimeField(default=datetime.now)
     end_time = DateTimeField(null=True)
     duration_seconds = IntegerField(default=0)
@@ -101,13 +103,12 @@ class Repository:
 
     @staticmethod
     def add_user(user_id: str, mail: str, display_name: str, job_title: str) -> None:
-        """Adds a new user to the database, avoiding duplicates."""
         user, created = DbUser.get_or_create(
             id=user_id,
             defaults={
-                'mail': mail.lower(),
-                'display_name': display_name,
-                'job_title': job_title
+                "mail": mail.lower(),
+                "display_name": display_name,
+                "job_title": job_title
             }
         )
         if not created and (user.display_name != display_name or user.job_title != job_title):
@@ -121,7 +122,6 @@ class Repository:
 
     @staticmethod
     def get_last_presence(user_id: str):
-        """Fetches the most recent presence record for a specified user. Returns None if no record is found."""
         try:
             return DbPresence.select().where(DbPresence.user == user_id).order_by(DbPresence.start_time.desc()).get()
         except DoesNotExist:
@@ -129,7 +129,6 @@ class Repository:
 
     @staticmethod
     def update_presence_end_time_and_duration(user_id: str, end_time: datetime, duration_seconds: int):
-        """Updates the end time and duration of the last tracked period of unavailability for a specific user."""
         query = DbPresence.update(end_time=end_time, duration_seconds=duration_seconds).where(
             (DbPresence.user == user_id) & (DbPresence.end_time.is_null())
         )
@@ -163,7 +162,7 @@ class Repository:
     @staticmethod
     def get_user_availability(user_mails: list[str], start_dt: datetime, end_dt: datetime):
         result = (
-            DbUser.select(DbUser, fn.COALESCE(fn.SUM(DbPresence.duration_seconds), 0).alias('total_seconds'))
+            DbUser.select(DbUser, fn.COALESCE(fn.SUM(DbPresence.duration_seconds), 0).alias("total_seconds"))
             .join(DbPresence, JOIN.LEFT_OUTER, on=(DbUser.id == DbPresence.user))
             .where((DbPresence.start_time.between(start_dt, end_dt)) | (DbPresence.start_time.is_null()))
             .where(DbUser.mail.in_(user_mails))
@@ -172,7 +171,7 @@ class Repository:
                 (fn.COALESCE(fn.SUM(DbPresence.duration_seconds), 0) <
                  fn.floor((end_dt - start_dt).total_seconds()) - 5)
             )
-            .order_by(SQL('total_seconds').desc())
+            .order_by(SQL("total_seconds").desc())
         )
 
         return result
@@ -181,6 +180,7 @@ class Repository:
 class PresenceTracker:
     def __init__(self):
         self.params = Params()
+        self.logger = self.configure_logger()
         self.graph_client = self._initialize_graph_client(self.params)
         Repository.init_db()
 
@@ -195,7 +195,7 @@ class PresenceTracker:
         start_dt, end_dt = self._get_start_and_end_time()
 
         if datetime.now() < start_dt:
-            print(f"Waiting until the scheduled start time: {self._format_time(start_dt)}...")
+            self.logger.info(f"Waiting until the scheduled start time: {self._format_time(start_dt)}...")
 
             while datetime.now() < start_dt:
                 await sleep(1)
@@ -216,7 +216,7 @@ class PresenceTracker:
 
             query_params = UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
                 select=["id", "mail", "displayName", "jobTitle"],
-                filter=f"mail in ({', '.join([f'\'{email}\'' for email in remaining_emails])})",
+                filter=f"mail in ({", ".join([f"\"{email}\"" for email in remaining_emails])})",
             )
 
             request_config = UsersRequestBuilder.UsersRequestBuilderGetRequestConfiguration(
@@ -273,24 +273,26 @@ class PresenceTracker:
     def _print_presence_statistics(self, start_dt: datetime, end_dt: datetime) -> None:
         user_availability = Repository.get_user_availability(self.params.tracked_user_emails, start_dt, end_dt)
 
-        print(f"Presence stats from {self._format_time(start_dt)} to {self._format_time(end_dt)}:")
+        self.logger.info(f"Presence stats from {self._format_time(start_dt)} to {self._format_time(end_dt)}:")
         if not user_availability:
-            print("All users were unavailable for the scheduled tracking time")
+            self.logger.info("All users were unavailable for the scheduled tracking time")
         else:
             for user in user_availability:
-                print(f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)")
+                self.logger.info(
+                    f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)"
+                )
 
     def _track_individual_user(self, presence: Presence, dt_initial: Optional[datetime]) -> None:
         display_name = Repository.get_user(presence.id).display_name
         availability, user_id = presence.availability, presence.id
         dt_now = dt_initial if dt_initial is not None else datetime.now()
 
-        if availability in ['Away', 'Offline']:
+        if availability in ["Away", "Offline"]:
             last_presence = Repository.get_last_presence(user_id)
             if last_presence is None or last_presence.end_time is not None:
                 Repository.add_presence(user_id, dt_now, None, 0)
                 if not dt_initial:
-                    print(f"{display_name} went {availability.lower()} at {self._format_time(dt_now)}")
+                    self.logger.info(f"{display_name} went {availability.lower()} at {self._format_time(dt_now)}")
         else:
             self._handle_user_becoming_available(user_id, dt_now)
 
@@ -304,21 +306,63 @@ class PresenceTracker:
         str_start, str_end = self._format_time(dt_start), self._format_time(dt_end)
 
         if str_start != str_end:
-            print(f"{Repository.get_user(user_id).display_name} was unavailable from {str_start} to {str_end}")
+            self.logger.info(
+                f"{Repository.get_user(user_id).display_name} was unavailable from {str_start} to {str_end}"
+            )
 
         duration_seconds = int((dt_end - dt_start).total_seconds())
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 
-    @staticmethod
-    async def cleanup_async():
+    async def cleanup_async(self):
         deleted_records = Repository.delete_invalid_presence_records()
         updated_records = Repository.close_out_incomplete_presence_records()
 
         if deleted_records > 0:
-            print(f"Cleanup: deleted {deleted_records} presence record(s) with no start time")
+            self.logger.info(f"Cleanup: deleted {deleted_records} presence record(s) with no start time")
 
         if updated_records > 0:
-            print(f"Cleanup: updated end time to now for {updated_records} presence record(s) with missing end time")
+            self.logger.info(
+                f"Cleanup: updated end time to now for {updated_records} presence record(s) with missing end time"
+            )
+
+    @staticmethod
+    def configure_logger() -> Logger:
+        log_dir = "logs"
+        if not exists(log_dir):
+            makedirs(log_dir)
+
+        logger = getLogger(__name__)
+        logger.setLevel(INFO)
+
+        file_handler = TimedRotatingFileHandler(f"{log_dir}/{_APP_NAME}.log", when="midnight", interval=1)
+        file_handler.suffix = "%Y%m%d"
+        file_handler.setLevel(INFO)
+
+        console_handler = StreamHandler()
+        console_handler.setLevel(INFO)
+
+        file_formatter = Formatter(
+            "%(levelname)-8s[%(asctime)s] %(message)s",
+            datefmt="%H:%M:%S"
+        )
+        console_formatter = ColoredFormatter(
+            "[%(asctime)s] %(log_color)s%(message)s",
+            datefmt="%H:%M:%S",
+            reset=True,
+            log_colors={
+                "WARNING": "yellow",
+                "ERROR": "red",
+                "CRITICAL": "red,bg_white",
+            }
+        )
+
+        file_handler.setFormatter(file_formatter)
+        console_handler.setFormatter(console_formatter)
+
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+
+        return logger
 
     @staticmethod
     def _initialize_graph_client(params: Params) -> GraphServiceClient:
@@ -345,8 +389,8 @@ class PresenceTracker:
 
     @staticmethod
     def _format_time(dt: datetime) -> str:
-        # return dt.strftime('%I:%M:%p').lstrip('0').lower()  # real
-        return dt.strftime('%I:%M:%S%p').lstrip('0').lower()  # test
+        # return dt.strftime("%I:%M:%p").lstrip("0").lower()  # real
+        return dt.strftime("%I:%M:%S%p").lstrip("0").lower()  # test
 
 
 async def main():
@@ -354,12 +398,12 @@ async def main():
         try:
             await tracker.track_async()
         except Exception as e:
-            print(f"An error occurred: {e}")
+            tracker.logger.error(e)
         except BaseException:
-            print(f"Script cancelled")
+            tracker.logger.warning(f"Script cancelled")
         finally:
             await tracker.cleanup_async()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run(main())
