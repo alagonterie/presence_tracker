@@ -2,7 +2,6 @@ from asyncio import sleep, run
 from datetime import datetime, date
 from json import load
 from logging import basicConfig, INFO
-from math import ceil, floor
 from os import access, R_OK
 from os.path import isfile
 from sys import argv
@@ -14,8 +13,9 @@ from msgraph import GraphServiceClient
 from msgraph.generated.communications.get_presences_by_user_id.get_presences_by_user_id_post_request_body import \
     GetPresencesByUserIdPostRequestBody
 from msgraph.generated.models.presence import Presence
-from msgraph.generated.models.user import User
 from msgraph.generated.users.users_request_builder import UsersRequestBuilder
+from peewee import Model, CharField, SqliteDatabase, ForeignKeyField, DateTimeField, SQL, fn, DoesNotExist, \
+    IntegerField, JOIN
 
 basicConfig(level=INFO)
 
@@ -71,19 +71,105 @@ class Params:
             return False
 
 
+db = SqliteDatabase('presence_tracker.db')
+
+
+class DbBase(Model):
+    class Meta:
+        database = db
+
+
+class DbUser(DbBase):
+    id = CharField(unique=True)
+    mail = CharField(unique=True)
+    display_name = CharField(max_length=255)
+    job_title = CharField(max_length=255, null=True)
+
+
+class DbPresence(DbBase):
+    user = ForeignKeyField(DbUser, backref='presences')
+    start_time = DateTimeField(default=datetime.now)
+    end_time = DateTimeField(null=True)
+    duration_seconds = IntegerField(default=0)
+
+
+class Repository:
+    @staticmethod
+    def init_db():
+        db.connect()
+        db.create_tables([DbUser, DbPresence], safe=True)
+
+    @staticmethod
+    def add_user(user_id: str, mail: str, display_name: str, job_title: str) -> None:
+        """Adds a new user to the database, avoiding duplicates."""
+        user, created = DbUser.get_or_create(
+            id=user_id,
+            defaults={
+                'mail': mail.lower(),
+                'display_name': display_name,
+                'job_title': job_title
+            }
+        )
+        if not created and (user.display_name != display_name or user.job_title != job_title):
+            user.display_name = display_name
+            user.job_title = job_title
+            user.save()
+
+    @staticmethod
+    def get_user(user_id):
+        return DbUser.get(DbUser.id == user_id)
+
+    @staticmethod
+    def get_last_presence(user_id: str):
+        """Fetches the most recent presence record for a specified user. Returns None if no record is found."""
+        try:
+            return DbPresence.select().where(DbPresence.user == user_id).order_by(DbPresence.start_time.desc()).get()
+        except DoesNotExist:
+            return None
+
+    @staticmethod
+    def update_presence_end_time_and_duration(user_id: str, end_time: datetime, duration_seconds: int):
+        """Updates the end time and duration of the last tracked period of unavailability for a specific user."""
+        query = DbPresence.update(end_time=end_time, duration_seconds=duration_seconds).where(
+            (DbPresence.user == user_id) & (DbPresence.end_time.is_null())
+        )
+        query.execute()
+
+    @staticmethod
+    def add_presence(user_id, start_time, end_time, duration_seconds: int):
+        user = Repository.get_user(user_id)
+        DbPresence.create(user=user, start_time=start_time, end_time=end_time, duration_seconds=duration_seconds)
+
+    @staticmethod
+    def get_users_by_emails(emails):
+        return DbUser.select().where(DbUser.mail.in_(emails))
+
+    @staticmethod
+    def get_user_availability(user_mails: list[str], start_dt: datetime, end_dt: datetime):
+        result = (
+            DbUser.select(DbUser, fn.COALESCE(fn.SUM(DbPresence.duration_seconds), 0).alias('total_seconds'))
+            .join(DbPresence, JOIN.LEFT_OUTER, on=(DbUser.id == DbPresence.user))
+            .where((DbPresence.start_time.between(start_dt, end_dt)) | (DbPresence.start_time.is_null()))
+            .where(DbUser.mail.in_(user_mails))
+            .group_by(DbUser)
+            .having(
+                (fn.COALESCE(fn.SUM(DbPresence.duration_seconds), 0) <
+                 fn.floor((end_dt - start_dt).total_seconds()) - 5)
+            )
+            .order_by(SQL('total_seconds').desc())
+        )
+
+        return result
+
+
 class PresenceTracker:
     def __init__(self) -> None:
         self.params = Params()
         self.graph_client = self._initialize_graph_client(self.params)
-        self.users: dict[str, User] = {}
-        self.tracking_start_time: Optional[datetime] = None
-        self.user_away_minutes: dict[str, float] = {}
-        self.user_unavailable_start_times: dict[str, Optional[datetime]] = {}
-        self.user_unavailable_timespans: dict[str, list[tuple[datetime, datetime]]] = {}
+        Repository.init_db()
 
     async def track_async(self) -> None:
         await self._populate_tracked_users_async()
-
         start_dt, end_dt = self._get_start_and_end_time()
 
         if datetime.now() < start_dt:
@@ -92,17 +178,23 @@ class PresenceTracker:
             while datetime.now() < start_dt:
                 await sleep(1)
 
-        await self._track_during_scheduled_time_async(end_dt)
+        await self._track_until_scheduled_end_time_async(end_dt)
 
         self._end_of_scheduled_time_cleanup(end_dt)
-        self._print_presence_statistics(end_dt, start_dt)
+        self._print_presence_statistics(start_dt, end_dt)
 
     async def _populate_tracked_users_async(self) -> None:
         email_chunks = self._chunk_emails(self.params.tracked_user_emails)
         for chunk in email_chunks:
+            db_users = {user.mail: user for user in Repository.get_users_by_emails(chunk)}
+            remaining_emails = [email for email in chunk if email not in db_users]
+
+            if not remaining_emails:
+                continue
+
             query_params = UsersRequestBuilder.UsersRequestBuilderGetQueryParameters(
-                select=["id", "displayName", "jobTitle"],
-                filter=f"mail in ({', '.join([f'\'{email}\'' for email in chunk])})",
+                select=["id", "mail", "displayName", "jobTitle"],
+                filter=f"mail in ({', '.join([f'\'{email}\'' for email in remaining_emails])})",
             )
 
             request_config = UsersRequestBuilder.UsersRequestBuilderGetRequestConfiguration(
@@ -110,30 +202,28 @@ class PresenceTracker:
             )
             response = await self.graph_client.users.get(request_configuration=request_config)
 
-            self.users.update({user.id: user for user in response.value})
+            for user in response.value:
+                if user.mail in db_users:
+                    continue
 
-        for user in self.users.values():
-            self.user_away_minutes[user.display_name] = 0
+                Repository.add_user(user.id, user.mail, user.display_name, user.job_title)
 
-    async def _track_during_scheduled_time_async(self, end_dt: datetime) -> None:
-        is_initial = True
+    async def _track_until_scheduled_end_time_async(self, end_dt: datetime) -> None:
+        dt_initial = datetime.now()
         while datetime.now() < end_dt:
-            await self._track_user_presence_async(is_initial)
-            is_initial = False
+            await self._track_user_presence_async(dt_initial)
+            dt_initial = None
 
             await sleep(self.params.ping_seconds)
 
-    async def _track_user_presence_async(self, is_initial: bool = False) -> None:
-        if self.tracking_start_time is None:
-            self.tracking_start_time = datetime.now()
+    async def _track_user_presence_async(self, dt_initial: Optional[datetime]) -> None:
+        db_users = Repository.get_users_by_emails(self.params.tracked_user_emails)
 
-        request_body = GetPresencesByUserIdPostRequestBody(ids=[user_id for user_id in self.users.keys()])
+        request_body = GetPresencesByUserIdPostRequestBody(ids=[user.id for user in db_users])
         response = await self.graph_client.communications.get_presences_by_user_id.post(request_body)
 
         for presence in response.value:
-            self._track_individual_user(presence, is_initial)
-
-        self.tracking_start_time = datetime.now()
+            self._track_individual_user(presence, dt_initial)
 
     # noinspection PyMethodMayBeStatic
     def _get_start_and_end_time(self) -> tuple[datetime, datetime]:
@@ -150,72 +240,52 @@ class PresenceTracker:
         return start_dt, end_dt
 
     def _end_of_scheduled_time_cleanup(self, end_dt: datetime) -> None:
-        for user_id, user_start_dt in self.user_unavailable_start_times.items():
-            if user_start_dt is not None:
-                self._end_of_day_cleanup_for_unavailable_user(user_id, user_start_dt, end_dt)
+        for user in Repository.get_users_by_emails(self.params.tracked_user_emails):
+            if user.presences:
+                last_presence = Repository.get_last_presence(user.id)
 
-    def _print_presence_statistics(self, end_dt: datetime, start_dt: datetime) -> None:
-        sorted_users = sorted(
-            [
-                user for user in self.user_away_minutes.keys()
-                if ceil(self.user_away_minutes[user]) < floor((end_dt - start_dt).total_seconds() / 60) or len(
-                    self.user_unavailable_timespans[user]
-                ) > 1
-            ], key=lambda x: self.user_away_minutes[x], reverse=True
-        )
+                if not last_presence.end_time:
+                    duration_seconds = int((end_dt - last_presence.start_time).total_seconds())
+                    Repository.update_presence_end_time_and_duration(user.id, end_dt, duration_seconds)
+
+    def _print_presence_statistics(self, start_dt: datetime, end_dt: datetime) -> None:
+        user_availability = Repository.get_user_availability(self.params.tracked_user_emails, start_dt, end_dt)
 
         print(f"Presence stats from {self._format_time(start_dt)} to {self._format_time(end_dt)}:")
-        if not any(sorted_users):
+        if not user_availability:
             print("All users were unavailable for the scheduled tracking time")
         else:
-            for user in sorted_users:
-                print(f"{user} was unavailable for a total of {self.user_away_minutes[user]} minute(s)")
+            for user in user_availability:
+                print(f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)")
 
-    def _end_of_day_cleanup_for_unavailable_user(self, user_id: str, user_start_dt: datetime, end_dt: datetime) -> None:
-        display_name = self.users[user_id].display_name
-        if display_name not in self.user_unavailable_timespans:
-            self.user_unavailable_timespans[display_name] = []
-
-        self.user_unavailable_timespans[display_name].append((user_start_dt, end_dt))
-
-        duration_minutes = (end_dt - user_start_dt).total_seconds() / 60
-        self.user_away_minutes[display_name] = round(self.user_away_minutes.get(display_name, 0) + duration_minutes, 2)
-
-    def _track_individual_user(self, presence: Presence, is_initial: bool) -> None:
-        display_name, availability, user_id = self.users[presence.id].display_name, presence.availability, presence.id
-        dt_now = datetime.now()
+    def _track_individual_user(self, presence: Presence, dt_initial: Optional[datetime]) -> None:
+        display_name = Repository.get_user(presence.id).display_name
+        availability, user_id = presence.availability, presence.id
+        dt_now = dt_initial if dt_initial is not None else datetime.now()
 
         if availability in ['Away', 'Offline']:
-            dt_start = self.user_unavailable_start_times.get(user_id)
-
-            if dt_start is None:
-                self.user_unavailable_start_times[user_id] = dt_now
-                if not is_initial:
+            last_presence = Repository.get_last_presence(user_id)
+            if last_presence is None or last_presence.end_time is not None:
+                Repository.add_presence(user_id, dt_now, None, 0)
+                if not dt_initial:
                     print(f"{display_name} went {availability.lower()} at {self._format_time(dt_now)}")
         else:
-            self._handle_user_availability(dt_now, user_id)
+            self._handle_user_becoming_available(user_id, dt_now)
 
-    def _handle_user_availability(self, dt_now: datetime, user_id: str) -> None:
-        dt_start = self.user_unavailable_start_times.get(user_id)
+    def _handle_user_becoming_available(self, user_id: str, dt_available: datetime) -> None:
+        last_presence = Repository.get_last_presence(user_id)
 
-        if dt_start is not None:
-            self._store_unavailability(user_id, dt_start, dt_now)
+        if last_presence is not None and last_presence.start_time is not None and last_presence.end_time is None:
+            self._end_unavailability_presence(user_id, last_presence.start_time, dt_available)
 
-    def _store_unavailability(self, user_id: str, dt_start: datetime, dt_now: datetime) -> None:
-        str_start, str_now = self._format_time(dt_start), self._format_time(dt_now)
-        display_name = self.users[user_id].display_name
+    def _end_unavailability_presence(self, user_id: str, dt_start: datetime, dt_end: datetime) -> None:
+        str_start, str_end = self._format_time(dt_start), self._format_time(dt_end)
 
-        if str_start != str_now:
-            print(f"{display_name} was unavailable from {str_start} to {str_now}")
+        if str_start != str_end:
+            print(f"{Repository.get_user(user_id).display_name} was unavailable from {str_start} to {str_end}")
 
-        if display_name not in self.user_unavailable_timespans:
-            self.user_unavailable_timespans[display_name] = []
-
-        self.user_unavailable_timespans[display_name].append((dt_start, dt_now))
-        self.user_unavailable_start_times[user_id] = None
-
-        duration_minutes = (dt_now - dt_start).total_seconds() / 60
-        self.user_away_minutes[display_name] = round(self.user_away_minutes.get(display_name, 0) + duration_minutes, 2)
+        duration_seconds = int((dt_end - dt_start).total_seconds())
+        Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 
     @staticmethod
     def _initialize_graph_client(params: Params) -> GraphServiceClient:
@@ -238,7 +308,8 @@ class PresenceTracker:
 
     @staticmethod
     def _format_time(dt: datetime) -> str:
-        return dt.strftime('%I:%M%p').lstrip('0').lower()
+        # return dt.strftime('%I:%M:%p').lstrip('0').lower()  # real
+        return dt.strftime('%I:%M:%S%p').lstrip('0').lower()  # test
 
 
 def main() -> None:
