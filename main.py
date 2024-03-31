@@ -145,14 +145,18 @@ class Repository:
         return DbUser.select().where(DbUser.mail.in_(emails))
 
     @staticmethod
-    def delete_incomplete_presence_records() -> int:
+    def delete_invalid_presence_records() -> int:
         return DbPresence.delete().where(DbPresence.start_time.is_null()).execute()
 
     @staticmethod
-    def set_end_time_to_now_for_incomplete_records() -> int:
+    def close_out_incomplete_presence_records() -> int:
         now = datetime.now()
-        query = DbPresence.update(end_time=now).where(
-            (~(DbPresence.start_time.is_null())) & (DbPresence.end_time.is_null())
+        query = DbPresence.update(
+            end_time=now,
+            duration_seconds=fn.Round((fn.JulianDay(now) - fn.JulianDay(DbPresence.start_time)) * 86400)
+        ).where(
+            (~(DbPresence.start_time.is_null())) &
+            (DbPresence.end_time.is_null())
         )
         return query.execute()
 
@@ -307,8 +311,8 @@ class PresenceTracker:
 
     @staticmethod
     async def cleanup_async():
-        deleted_records = Repository.delete_incomplete_presence_records()
-        updated_records = Repository.set_end_time_to_now_for_incomplete_records()
+        deleted_records = Repository.delete_invalid_presence_records()
+        updated_records = Repository.close_out_incomplete_presence_records()
 
         if deleted_records > 0:
             print(f"Cleanup: deleted {deleted_records} presence record(s) with no start time")
