@@ -114,7 +114,7 @@ class DbPresence(DbBase):
 
 class Repository:
     @staticmethod
-    def init_db():
+    def init_db() -> None:
         db.connect()
         db.create_tables([DbUser, DbPresence], safe=True)
 
@@ -134,7 +134,7 @@ class Repository:
             user.save()
 
     @staticmethod
-    def get_user(user_id):
+    def get_user(user_id: str):
         return DbUser.get(DbUser.id == user_id)
 
     @staticmethod
@@ -152,12 +152,12 @@ class Repository:
         query.execute()
 
     @staticmethod
-    def add_presence(user_id, start_time, end_time, duration_seconds: int):
+    def add_presence(user_id, start_time, end_time, duration_seconds: int) -> None:
         user = Repository.get_user(user_id)
         DbPresence.create(user=user, start_time=start_time, end_time=end_time, duration_seconds=duration_seconds)
 
     @staticmethod
-    def get_users_by_emails(emails):
+    def get_users_by_emails(emails: list[str]):
         return DbUser.select().where(DbUser.mail.in_(emails))
 
     @staticmethod
