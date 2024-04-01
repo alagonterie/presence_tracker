@@ -5,9 +5,9 @@ from logging import INFO, DEBUG, getLogger, StreamHandler, Logger, Formatter
 from logging.handlers import TimedRotatingFileHandler
 from os import access, R_OK, makedirs
 from os.path import isfile, exists
+from re import compile, match
 from sys import argv
 from typing import Optional, Callable
-from re import match
 
 # noinspection PyPackageRequirements
 from azure.identity import InteractiveBrowserCredential, TokenCachePersistenceOptions
@@ -18,7 +18,7 @@ from msgraph.generated.communications.get_presences_by_user_id.get_presences_by_
 from msgraph.generated.models.presence import Presence
 from msgraph.generated.users.users_request_builder import UsersRequestBuilder
 from peewee import Model, CharField, SqliteDatabase, ForeignKeyField, DateTimeField, SQL, fn, DoesNotExist, \
-    IntegerField, JOIN
+    IntegerField, JOIN, PrimaryKeyField
 
 _APP_NAME = "presence_tracker"
 
@@ -83,7 +83,7 @@ class Params:
 
     @staticmethod
     def _count_plus_at_start(mail: str) -> int:
-        m = match(r'^(\+*)', mail)
+        m = match(r"^(\+*)", mail)
         if m:
             return len(m.group())
         else:
@@ -104,19 +104,39 @@ class DbUser(DbBase):
     display_name = CharField(max_length=255)
     job_title = CharField(max_length=255, null=True)
 
+    class Meta:
+        db_table = "user"
+
+
+class DbSession(DbBase):
+    id = PrimaryKeyField(null=False)
+    start_time = DateTimeField(default=datetime.now)
+    end_time = DateTimeField(null=True)
+
+    class Meta:
+        db_table = "session"
+
 
 class DbPresence(DbBase):
+    session = ForeignKeyField(DbSession, backref="presences")
     user = ForeignKeyField(DbUser, backref="presences")
     start_time = DateTimeField(default=datetime.now)
     end_time = DateTimeField(null=True)
     duration_seconds = IntegerField(default=0)
+
+    class Meta:
+        db_table = "presence"
 
 
 class Repository:
     @staticmethod
     def init_db() -> None:
         db.connect()
-        db.create_tables([DbUser, DbPresence], safe=True)
+        db.create_tables([DbUser, DbPresence, DbSession], safe=True)
+
+    @staticmethod
+    def start_session() -> DbSession:
+        return DbSession.create()
 
     @staticmethod
     def add_user(user_id: str, mail: str, display_name: str, job_title: str) -> None:
@@ -152,9 +172,15 @@ class Repository:
         query.execute()
 
     @staticmethod
-    def add_presence(user_id, start_time, end_time, duration_seconds: int) -> None:
+    def add_presence(session: DbSession, user_id, start_time, end_time, duration_seconds: int) -> None:
         user = Repository.get_user(user_id)
-        DbPresence.create(user=user, start_time=start_time, end_time=end_time, duration_seconds=duration_seconds)
+        DbPresence.create(
+            session=session,
+            user=user,
+            start_time=start_time,
+            end_time=end_time,
+            duration_seconds=duration_seconds
+        )
 
     @staticmethod
     def get_users_by_emails(emails: list[str]):
@@ -165,8 +191,7 @@ class Repository:
         return DbPresence.delete().where(DbPresence.start_time.is_null()).execute()
 
     @staticmethod
-    def close_out_incomplete_presence_records() -> int:
-        now = datetime.now()
+    def close_out_incomplete_presence_records(now: datetime) -> int:
         query = DbPresence.update(
             end_time=now,
             duration_seconds=fn.Round((fn.JulianDay(now) - fn.JulianDay(DbPresence.start_time)) * 86400)
@@ -205,6 +230,7 @@ class PresenceTracker:
             3: self.logger.critical
         }
         self.graph_client = self._initialize_graph_client(self.params)
+        self.session = None
         Repository.init_db()
 
     async def __aenter__(self):
@@ -214,6 +240,7 @@ class PresenceTracker:
         await self.cleanup_async()
 
     async def track_async(self) -> None:
+        self.session = Repository.start_session()
         await self._populate_tracked_users_async()
         start_dt, end_dt = self._get_start_and_end_time()
 
@@ -223,7 +250,7 @@ class PresenceTracker:
             while datetime.now() < start_dt:
                 await sleep(1)
 
-        self.logger.info("Presence tracker started")
+        self.logger.info(f"Presence tracker started, session id: {self.session.id}")
         await self._track_until_scheduled_end_time_async(end_dt)
 
         self._end_of_scheduled_time_cleanup(end_dt)
@@ -318,7 +345,7 @@ class PresenceTracker:
         if availability in ["Away", "Offline"]:
             last_presence = Repository.get_last_presence(user_id)
             if last_presence is None or last_presence.end_time is not None:
-                Repository.add_presence(user_id, dt_now, None, 0)
+                Repository.add_presence(self.session, user_id, dt_now, None, 0)
                 if not dt_initial:
                     log_func(f"{display_name} went {availability.lower()} at {self._format_time(dt_now)}")
         else:
@@ -340,8 +367,13 @@ class PresenceTracker:
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 
     async def cleanup_async(self):
+        now = datetime.now()
+        if self.session is not None:
+            self.session.end_time = now
+            self.session.save()
+
         deleted_records = Repository.delete_invalid_presence_records()
-        updated_records = Repository.close_out_incomplete_presence_records()
+        updated_records = Repository.close_out_incomplete_presence_records(now)
 
         if deleted_records > 0:
             self.logger.info(f"Cleanup: deleted {deleted_records} presence record(s) with no start time")
@@ -360,9 +392,9 @@ class PresenceTracker:
         logger = getLogger(__name__)
         logger.setLevel(DEBUG)
 
-        file_handler = TimedRotatingFileHandler(f"{log_dir}/{_APP_NAME}.log", when="midnight", interval=1)
-        file_handler.suffix = "%Y%m%d"
-        file_handler.setLevel(DEBUG)
+        file_handler = TimedRotatingFileHandler(f"{log_dir}/{_APP_NAME}", when="midnight", interval=1)
+        file_handler.suffix = "%Y%m%d.log"
+        file_handler.extMatch = compile(r"^\d{8}.log$")
 
         console_handler = StreamHandler()
         console_handler.setLevel(INFO)
@@ -385,7 +417,7 @@ class PresenceTracker:
         file_handler.setFormatter(file_formatter)
         console_handler.setFormatter(console_formatter)
 
-        httpx_logger = getLogger('httpx')
+        httpx_logger = getLogger("httpx")
         httpx_logger.setLevel(INFO)
         httpx_logger.addHandler(file_handler)
 
