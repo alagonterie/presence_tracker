@@ -240,7 +240,6 @@ class PresenceTracker:
         await self.cleanup_async()
 
     async def track_async(self) -> None:
-        self.session = Repository.start_session()
         await self._populate_tracked_users_async()
         start_dt, end_dt = self._get_start_and_end_time()
 
@@ -250,6 +249,7 @@ class PresenceTracker:
             while datetime.now() < start_dt:
                 await sleep(1)
 
+        self.session = Repository.start_session()
         self.logger.info(f"Presence tracker started, session id: {self.session.id}")
         await self._track_until_scheduled_end_time_async(end_dt)
 
