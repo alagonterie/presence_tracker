@@ -2,7 +2,7 @@ import json
 import sqlite3
 import csv
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 # Load parameters from JSON file
 with open('params.json') as f:
@@ -26,7 +26,17 @@ cursor = conn.cursor()
 # Calculate start date report_days ago
 date_report_days_ago = datetime.now() - timedelta(days=report_days)
 
-# Get total presences for each user, total duration and average duration per session in the last report_days
+# Count the number of days with sessions, excluding weekends
+cursor.execute(
+    """
+    SELECT DISTINCT DATE(start_time) AS session_day
+    FROM SESSION
+    WHERE start_time >= ?
+    """, (date_report_days_ago,)
+)
+session_days = sum(1 for row in cursor.fetchall() if date.fromisoformat(row[0]).weekday() < 5)
+
+# Get total presence for each user, total duration and average duration per session in the last report_days
 cursor.execute(
     """
     SELECT user_id, COUNT(*), SUM(duration_seconds)
@@ -44,8 +54,8 @@ for user_id, count, duration in cursor.fetchall():
     user_email = cursor.fetchone()[0]
     user_presence[user_email]["total_availability_changes"] = count
     user_presence[user_email]["total_unavailability_minutes"] = seconds_to_minutes(duration)
-    user_presence[user_email]["average_unavailability_minutes_per_day"] = seconds_to_minutes(duration / report_days)
-    user_presence[user_email]["frequency_to_unavailable_per_day"] = count / report_days
+    user_presence[user_email]["average_unavailability_minutes_per_session"] = seconds_to_minutes(duration / session_days)
+    user_presence[user_email]["frequency_to_unavailable_per_session"] = count / session_days
 
 # Close the db connection
 cursor.close()
@@ -55,21 +65,24 @@ fields = [
     "email",
     "total_availability_changes",
     "total_unavailability_minutes",
-    "average_unavailability_minutes_per_day",
-    "frequency_to_unavailable_per_day"
+    "average_unavailability_minutes_per_session",
+    "frequency_to_unavailable_per_session"
 ]
+
+# Sort the result based on average_unavailability_minutes_per_session in descending order
+sorted_user_presence = dict(sorted(user_presence.items(), key=lambda item: item[1]['average_unavailability_minutes_per_session'], reverse=True))
 
 # Write the result to a CSV file
 with open('report.csv', 'w', newline='') as f:
     writer = csv.DictWriter(f, fieldnames=fields)
     writer.writeheader()
-    for email, data in user_presence.items():
+    for email, data in sorted_user_presence.items():
         writer.writerow(
             {
                 "email": email,
                 "total_availability_changes": data["total_availability_changes"],
                 "total_unavailability_minutes": data["total_unavailability_minutes"],
-                "average_unavailability_minutes_per_day": data["average_unavailability_minutes_per_day"],
-                "frequency_to_unavailable_per_day": data["frequency_to_unavailable_per_day"],
+                "average_unavailability_minutes_per_session": data["average_unavailability_minutes_per_session"],
+                "frequency_to_unavailable_per_session": data["frequency_to_unavailable_per_session"],
             }
         )
