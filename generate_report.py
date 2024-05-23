@@ -2,7 +2,7 @@ from collections import defaultdict
 from csv import DictWriter
 from datetime import datetime, timedelta, date
 from json import load
-from sqlite3 import connect
+from sqlite3 import register_adapter, connect
 
 # Load parameters from JSON file
 with open("params.json") as f:
@@ -20,6 +20,7 @@ def seconds_to_minutes(seconds):
 
 
 # Connect to the SQLite DB
+register_adapter(datetime, lambda val: val.isoformat())
 conn = connect("presence_tracker.db")
 cursor = conn.cursor()
 
