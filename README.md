@@ -51,8 +51,10 @@ In the `params.json` file, you can specify the following configuration details:
 
 - `end_hour` - (number) This sets the end hour in 24h format. This serves as the cut-off for the tracker. For example, setting it to `17` means the tracker will stop at `5PM`.
 
-- `tracked_user_emails`: (array of strings) This is a list of email addresses for the users you want to track. An example can
+- `tracked_user_emails` - (array of strings) This is a list of email addresses for the users you want to track. An example can
   be: ` ["user1@example.com", "user2@example.com", "user3@example.com"]`.
+
+- `report_days` - (number) This controls the span of time considered when running `generate_report.py`. For example, setting it to `365` results in a report of the last 365 days of tracking activity.
 
 Example `params.json`:
 
@@ -68,7 +70,8 @@ Example `params.json`:
     "user1@example.com",
     "user2@example.com",
     "user3@example.com"
-  ]
+  ],
+  "report_days": 365
 }
 ```
 
