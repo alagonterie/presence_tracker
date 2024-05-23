@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, date
 with open("params.json") as f:
     params = json.load(f)
 
-# Get the number of days from params
-report_days = params.get("report_days", 30)
+# Get the number of days from params report_days value
+report_days = params.get("report_days", 365)
 if report_days < 1:
     report_days = 1
 
@@ -23,7 +23,7 @@ def seconds_to_minutes(seconds):
 conn = sqlite3.connect("presence_tracker.db")
 cursor = conn.cursor()
 
-# Calculate start date report_days ago
+# Calculate start date, "report_days" in the past
 date_report_days_ago = datetime.now() - timedelta(days=report_days)
 
 # Count the number of days with sessions, excluding weekends
@@ -36,7 +36,7 @@ cursor.execute(
 )
 session_days = sum(1 for row in cursor.fetchall() if date.fromisoformat(row[0]).weekday() < 5)
 
-# Get the average duration of all sessions
+# Get the total seconds of all sessions combined
 cursor.execute(
     """
     SELECT SUM((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60)
@@ -59,17 +59,18 @@ cursor.execute(
 # Data dictionary to hold presence information by user email
 user_presence = defaultdict(dict)
 for user_id, presence_changes, total_unavailability_seconds in cursor.fetchall():
-    # Get user email
+    # Get user name and email
     cursor.execute("SELECT display_name, mail FROM user WHERE id = ?", (user_id,))
     user_name, user_email = cursor.fetchone()
+    
     user_presence[user_name]["User Email"] = user_email
-    user_presence[user_name]["Presence Change Total"] = presence_changes
-    user_presence[user_name]["Unavailability Minutes Total"] = seconds_to_minutes(total_unavailability_seconds)
+    user_presence[user_name]["Unavailability Percentage"] = min(1.0, round(0 if total_session_seconds == 0 else total_unavailability_seconds / total_session_seconds, 2))
     user_presence[user_name]["Unavailability Minutes Daily Average"] = seconds_to_minutes(total_unavailability_seconds / session_days)
-    user_presence[user_name]["Unavailability Percentage"] = round(0 if total_session_seconds == 0 else total_unavailability_seconds / total_session_seconds, 2)
-    user_presence[user_name]["Presence Change Daily Frequency"] = round(presence_changes / session_days, 2)
+    user_presence[user_name]["Unavailability Minutes Total"] = seconds_to_minutes(total_unavailability_seconds)
+    user_presence[user_name]["Go Unavailable Daily Frequency"] = round(presence_changes / session_days, 2)
+    user_presence[user_name]["Go Unavailable Total"] = presence_changes
 
-# Close the db connection
+# Close the DB connection
 cursor.close()
 conn.close()
 
@@ -77,14 +78,14 @@ conn.close()
 fields = [
     "User Name",
     "User Email",
-    "Presence Change Total",
-    "Unavailability Minutes Total",
-    "Unavailability Minutes Daily Average",
     "Unavailability Percentage",
-    "Presence Change Daily Frequency"
+    "Unavailability Minutes Daily Average",
+    "Unavailability Minutes Total",
+    "Go Unavailable Daily Frequency",
+    "Go Unavailable Total"
 ]
 
-# Sort the result based on Unavailability Minutes Daily Average in descending order
+# Sort the result based on Unavailability Percentage in descending order
 sorted_user_presence = dict(sorted(user_presence.items(), key=lambda item: item[1]["Unavailability Percentage"], reverse=True))
 
 # Write the results to a file
@@ -96,10 +97,10 @@ with open("report.csv", "w", newline="") as f:
             {
                 "User Name": name,
                 "User Email": data["User Email"],
-                "Presence Change Total": data["Presence Change Total"],
-                "Unavailability Minutes Total": data["Unavailability Minutes Total"],
-                "Unavailability Minutes Daily Average": data["Unavailability Minutes Daily Average"],
                 "Unavailability Percentage": data["Unavailability Percentage"],
-                "Presence Change Daily Frequency": data["Presence Change Daily Frequency"],
+                "Unavailability Minutes Daily Average": data["Unavailability Minutes Daily Average"],
+                "Unavailability Minutes Total": data["Unavailability Minutes Total"],
+                "Go Unavailable Daily Frequency": data["Go Unavailable Daily Frequency"],
+                "Go Unavailable Total": data["Go Unavailable Total"],
             }
         )
