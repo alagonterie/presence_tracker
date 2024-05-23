@@ -111,6 +111,46 @@ Logs are written to `logs/`.
 
 Presence data from each tracking session is saved to the `presence_tracker.db` SQLite database for further querying.
 
+## Generate Report Tool
+
+In addition to presence tracking, the project now includes a tool for generating reports based on the recorded data. The Report Generator is a Python script
+named `generate_report.py` that creates a CSV file with presence information for all tracked users.
+
+## Configuration
+
+`generate_report.py` reads a file named `params.json` for its configuration. The only parameter specifically required by `generate_report.py` is `report_days`. `report_days`
+represents the number of days in the past to consider when generating the report. For instance, if `report_days` is set to `365`, the Report Generator will create a report
+considering the last 365 days of tracking activity.
+
+In the `params.json` file, the `report_days` field should be filled as per your requirements:
+
+```json
+{
+  "report_days": 365
+}
+```
+
+## Usage
+
+To execute the report generation process, you simply need to run `generate_report.py`:
+
+```bash
+python generate_report.py
+```
+
+This will compute the statistics for the past `report_days` and generate a report as a CSV file. The file contains aggregated data from your `presence_tracker.db` SQLite DB. The more tracking sessions over time, the better the data in this report.
+
+## Output
+
+`generate_report.py` generates a CSV file that contains the following presence information for all tracked users:
+
+- User Name
+- User Email
+- Unavailability Percentage
+- Unavailability Minutes Daily Average
+- Unavailability Minutes Total
+- Go Unavailable Daily Frequency
+
 ## License
 
 Please refer to the terms mentioned in the [License](https://github.com/alagonterie/PresenceTracker/blob/main/LICENSE) document.
@@ -120,7 +160,3 @@ Please refer to the terms mentioned in the [License](https://github.com/alagonte
 ## Disclaimer
 
 The logs created by this project do not in any way connect to Microsoft Teams or any other platform and are strictly local to the system running the script.
-
-## Author
-
-[Alexander LaGonterie](https://github.com/alagonterie)
