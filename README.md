@@ -111,7 +111,7 @@ Logs are written to `logs/`.
 
 Presence data from each tracking session is saved to the `presence_tracker.db` SQLite database for further querying.
 
-## Generate Report Tool
+# Generate Report Tool
 
 In addition to presence tracking, the project now includes a tool for generating reports based on the recorded data. The Report Generator is a Python script
 named `generate_report.py` that creates a CSV file with presence information for all tracked users.
@@ -153,7 +153,7 @@ This will compute the statistics for the past `report_days` and generate a repor
 
 ## License
 
-Please refer to the terms mentioned in the [License](https://github.com/alagonterie/PresenceTracker/blob/main/LICENSE) document.
+Please refer to the terms mentioned in the [License](https://github.com/alagonterie/presence_tracker/blob/main/LICENSE) document.
 
 **Remember:** This application is provided as-is and should be used responsibly. Always get explicit consent from your team and/or organization before tracking their status.
 
