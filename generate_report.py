@@ -1,12 +1,12 @@
-import json
-import sqlite3
-import csv
 from collections import defaultdict
+from csv import DictWriter
 from datetime import datetime, timedelta, date
+from json import load
+from sqlite3 import connect
 
 # Load parameters from JSON file
 with open("params.json") as f:
-    params = json.load(f)
+    params = load(f)
 
 # Get the number of days from params report_days value
 report_days = params.get("report_days", 365)
@@ -20,7 +20,7 @@ def seconds_to_minutes(seconds):
 
 
 # Connect to the SQLite DB
-conn = sqlite3.connect("presence_tracker.db")
+conn = connect("presence_tracker.db")
 cursor = conn.cursor()
 
 # Calculate start date, "report_days" in the past
@@ -46,7 +46,7 @@ cursor.execute(
 )
 total_session_seconds = cursor.fetchone()[0]
 
-# Get total presence for each user, total duration and average duration per session in the last report_days
+# Get aggregate presence data for all tracked users
 cursor.execute(
     """
     SELECT user_id, COUNT(*), SUM(duration_seconds)
@@ -63,12 +63,12 @@ for user_id, presence_changes, total_unavailability_seconds in cursor.fetchall()
     cursor.execute("SELECT display_name, mail FROM user WHERE id = ?", (user_id,))
     user_name, user_email = cursor.fetchone()
     
-    user_presence[user_name]["User Email"] = user_email
-    user_presence[user_name]["Unavailability Percentage"] = min(1.0, round(0 if total_session_seconds == 0 else total_unavailability_seconds / total_session_seconds, 2))
-    user_presence[user_name]["Unavailability Minutes Daily Average"] = seconds_to_minutes(total_unavailability_seconds / session_days)
-    user_presence[user_name]["Unavailability Minutes Total"] = seconds_to_minutes(total_unavailability_seconds)
-    user_presence[user_name]["Go Unavailable Daily Frequency"] = round(presence_changes / session_days, 2)
-    user_presence[user_name]["Go Unavailable Total"] = presence_changes
+    user_presence[user_email]["User Name"] = user_name
+    user_presence[user_email]["Unavailability Percentage"] = min(1.0, round(0 if total_session_seconds == 0 else total_unavailability_seconds / total_session_seconds, 2))
+    user_presence[user_email]["Unavailability Minutes Daily Average"] = seconds_to_minutes(total_unavailability_seconds / session_days)
+    user_presence[user_email]["Unavailability Minutes Total"] = seconds_to_minutes(total_unavailability_seconds)
+    user_presence[user_email]["Go Unavailable Daily Frequency"] = round(presence_changes / session_days, 2)
+    user_presence[user_email]["Go Unavailable Total"] = presence_changes
 
 # Close the DB connection
 cursor.close()
@@ -90,13 +90,13 @@ sorted_user_presence = dict(sorted(user_presence.items(), key=lambda item: item[
 
 # Write the results to a file
 with open("report.csv", "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=fields)
+    writer = DictWriter(f, fieldnames=fields)
     writer.writeheader()
-    for name, data in sorted_user_presence.items():
+    for email, data in sorted_user_presence.items():
         writer.writerow(
             {
-                "User Name": name,
-                "User Email": data["User Email"],
+                "User Name": data["User Name"],
+                "User Email": email,
                 "Unavailability Percentage": data["Unavailability Percentage"],
                 "Unavailability Minutes Daily Average": data["Unavailability Minutes Daily Average"],
                 "Unavailability Minutes Total": data["Unavailability Minutes Total"],
