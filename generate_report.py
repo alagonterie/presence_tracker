@@ -2,6 +2,8 @@ from collections import defaultdict
 from csv import DictWriter
 from datetime import datetime, timedelta, date
 from json import load
+from os import makedirs
+from os.path import exists
 from sqlite3 import register_adapter, connect
 
 # Load parameters from JSON file
@@ -71,6 +73,25 @@ for user_id, presence_changes, total_unavailability_seconds in cursor.fetchall()
     user_presence[user_email]["Go Unavailable Daily Frequency"] = round(presence_changes / session_days, 2)
     user_presence[user_email]["Go Unavailable Total"] = presence_changes
 
+# Gather data to build report file name
+cursor.execute(
+    """
+    SELECT DATE(MIN(start_time)) 
+    FROM SESSION 
+    WHERE start_time >= ?
+    """, (date_report_days_ago,),
+)
+earliest_session_day = cursor.fetchone()[0]
+
+cursor.execute(
+    """
+    SELECT DATE(MAX(end_time)) 
+    FROM session 
+    WHERE start_time >= ?
+    """, (date_report_days_ago,),
+)
+latest_session_day = cursor.fetchone()[0]
+
 # Close the DB connection
 cursor.close()
 conn.close()
@@ -90,7 +111,11 @@ fields = [
 sorted_user_presence = dict(sorted(user_presence.items(), key=lambda item: item[1]["Unavailability Percentage"], reverse=True))
 
 # Write the results to a file
-with open("report.csv", "w", newline="") as f:
+if not exists("reports"):
+    makedirs("reports")
+
+filename = f"{earliest_session_day}-{latest_session_day}_presence_report.csv"
+with open(f"reports/{filename}", "w", newline="") as f:
     writer = DictWriter(f, fieldnames=fields)
     writer.writeheader()
     for email, data in sorted_user_presence.items():
