@@ -30,7 +30,8 @@ The format should be like this:
   "ping_seconds": <ping_seconds>,
   "start_hour": <start_hour>,
   "end_hour": <end_hour>,
-  "tracked_user_emails": [<tracked_user_emails>]
+  "tracked_user_emails": [<tracked_user_emails>],
+  "report_days": <report_days>
 }
 ```
 
