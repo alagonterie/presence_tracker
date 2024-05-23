@@ -39,12 +39,12 @@ session_days = sum(1 for row in cursor.fetchall() if date.fromisoformat(row[0]).
 # Get the average duration of all sessions
 cursor.execute(
     """
-    SELECT AVG((julianday(end_time) - julianday(start_time)) * 24 * 60)
+    SELECT SUM((julianday(end_time) - julianday(start_time)) * 24 * 60 * 60)
     FROM session
     WHERE start_time >= ?
     """, (date_report_days_ago,)
 )
-average_session_duration = cursor.fetchone()[0]
+total_session_seconds = cursor.fetchone()[0]
 
 # Get total presence for each user, total duration and average duration per session in the last report_days
 cursor.execute(
@@ -58,16 +58,16 @@ cursor.execute(
 
 # Data dictionary to hold presence information by user email
 user_presence = defaultdict(dict)
-for user_id, count, duration in cursor.fetchall():
+for user_id, presence_changes, total_unavailability_seconds in cursor.fetchall():
     # Get user email
-    cursor.execute("SELECT mail FROM user WHERE id = ?", (user_id,))
-    user_email = cursor.fetchone()[0]
-    user_presence[user_email]["total_availability_changes"] = count
-    user_presence[user_email]["total_unavailability_minutes"] = seconds_to_minutes(duration)
-    average_unavailability_minutes_per_session = seconds_to_minutes(duration / session_days)
-    user_presence[user_email]["average_unavailability_minutes_per_session"] = average_unavailability_minutes_per_session
-    user_presence[user_email]["average_unavailability_percentage"] = 0 if average_session_duration == 0 else average_unavailability_minutes_per_session / average_session_duration
-    user_presence[user_email]["frequency_to_unavailable_per_session"] = count / session_days
+    cursor.execute("SELECT display_name, mail FROM user WHERE id = ?", (user_id,))
+    user_name, user_email = cursor.fetchone()
+    user_presence[user_name]["User Email"] = user_email
+    user_presence[user_name]["Presence Change Total"] = presence_changes
+    user_presence[user_name]["Unavailability Minutes Total"] = seconds_to_minutes(total_unavailability_seconds)
+    user_presence[user_name]["Unavailability Minutes Daily Average"] = seconds_to_minutes(total_unavailability_seconds / session_days)
+    user_presence[user_name]["Unavailability Percentage"] = round(0 if total_session_seconds == 0 else total_unavailability_seconds / total_session_seconds, 2)
+    user_presence[user_name]["Presence Change Daily Frequency"] = round(presence_changes / session_days, 2)
 
 # Close the db connection
 cursor.close()
@@ -75,29 +75,31 @@ conn.close()
 
 # Start building report CSV
 fields = [
-    "email",
-    "total_availability_changes",
-    "total_unavailability_minutes",
-    "average_unavailability_minutes_per_session",
-    "average_unavailability_percentage",
-    "frequency_to_unavailable_per_session"
+    "User Name",
+    "User Email",
+    "Presence Change Total",
+    "Unavailability Minutes Total",
+    "Unavailability Minutes Daily Average",
+    "Unavailability Percentage",
+    "Presence Change Daily Frequency"
 ]
 
-# Sort the result based on average_unavailability_minutes_per_session in descending order
-sorted_user_presence = dict(sorted(user_presence.items(), key=lambda item: item[1]["average_unavailability_percentage"], reverse=True))
+# Sort the result based on Unavailability Minutes Daily Average in descending order
+sorted_user_presence = dict(sorted(user_presence.items(), key=lambda item: item[1]["Unavailability Percentage"], reverse=True))
 
 # Write the results to a file
 with open("report.csv", "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=fields)
     writer.writeheader()
-    for email, data in sorted_user_presence.items():
+    for name, data in sorted_user_presence.items():
         writer.writerow(
             {
-                "email": email,
-                "total_availability_changes": data["total_availability_changes"],
-                "total_unavailability_minutes": data["total_unavailability_minutes"],
-                "average_unavailability_minutes_per_session": data["average_unavailability_minutes_per_session"],
-                "average_unavailability_percentage": data["average_unavailability_percentage"],
-                "frequency_to_unavailable_per_session": data["frequency_to_unavailable_per_session"],
+                "User Name": name,
+                "User Email": data["User Email"],
+                "Presence Change Total": data["Presence Change Total"],
+                "Unavailability Minutes Total": data["Unavailability Minutes Total"],
+                "Unavailability Minutes Daily Average": data["Unavailability Minutes Daily Average"],
+                "Unavailability Percentage": data["Unavailability Percentage"],
+                "Presence Change Daily Frequency": data["Presence Change Daily Frequency"],
             }
         )
