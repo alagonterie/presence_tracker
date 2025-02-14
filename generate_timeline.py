@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
+from math import ceil
 
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
@@ -112,7 +113,7 @@ def plot_session_timeline(session, presences, users):
         # Draw the entire row as unavailable (gray)
         ax.add_patch(patches.Rectangle((0, y_pos), session_duration_minutes, 0.8, color="green"))
 
-        # Draw available segments (green)
+        # Draw available segments (gray)
         for (seg_start, seg_duration) in user_segments[uid]:
             rect = patches.Rectangle((seg_start, y_pos), seg_duration, 0.8, color="gray")
             ax.add_patch(rect)
@@ -121,15 +122,29 @@ def plot_session_timeline(session, presences, users):
 
     # Customize x-axis to display hours of the day
     total_minutes = int(session_duration_minutes)
-    x_ticks = range(0, total_minutes + 1, 60)  # One tick every hour
-    x_labels = [
-        (session_start + timedelta(minutes=minute)).strftime("%H:%M")
-        for minute in x_ticks
-    ]
+
+    # Find the first full hour after the session starts
+    session_start_hour_minute = session_start.hour * 60 + session_start.minute
+    first_tick_minutes = ceil(session_start_hour_minute / 60) * 60 - session_start_hour_minute
+
+    # Generate ticks aligned with full hours and ensure the last tick is the session end
+    x_ticks = list(range(first_tick_minutes, total_minutes, 60))  # Hourly ticks
+    if total_minutes not in x_ticks:  # Explicitly include the end of the session if not present
+        x_ticks.append(total_minutes)
+
+    # Generate corresponding labels, ensuring the last one matches the session_end time
+    x_labels = [(session_start + timedelta(minutes=minute)).strftime("%H:%M") for minute in x_ticks]
+
+    # Ensure the final tick is always accurately labeled, e.g., "16:00"
+    x_ticks[-1] = total_minutes  # Ensure last tick matches total duration in minutes
+    x_labels[-1] = session_end.strftime("%H:%M")  # Label the exact end time
+
     ax.set_xticks(x_ticks)
     ax.set_xticklabels(x_labels, rotation=45)
 
-    ax.set_xlim(0, session_duration_minutes)
+    # Fix the x-axis limit to end exactly at 16:00 (or the session end)
+    ax.set_xlim(0, x_ticks[-1])  # Align x-axis to the last tick (no extra space after 16:00)
+
     ax.set_ylim(0, len(tracked_user_ids))
     ax.set_xlabel("Time of Day")
     ax.set_yticks(y_ticks)
