@@ -119,9 +119,19 @@ def plot_session_timeline(session, presences, users):
 
         ax.hlines(y=y_pos, xmin=0, xmax=session_duration_minutes, color="white", linewidth=0.8)
 
+    # Customize x-axis to display hours of the day
+    total_minutes = int(session_duration_minutes)
+    x_ticks = range(0, total_minutes + 1, 60)  # One tick every hour
+    x_labels = [
+        (session_start + timedelta(minutes=minute)).strftime("%H:%M")
+        for minute in x_ticks
+    ]
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels, rotation=45)
+
     ax.set_xlim(0, session_duration_minutes)
     ax.set_ylim(0, len(tracked_user_ids))
-    ax.set_xlabel("Minutes from session start")
+    ax.set_xlabel("Time of Day")
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels)
     ax.set_title(f"Session {session_id} - {session_start.strftime('%Y-%m-%d %H:%M')} to {session_end.strftime('%H:%M')}")
