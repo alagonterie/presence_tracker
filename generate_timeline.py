@@ -1,31 +1,30 @@
-#!/usr/bin/env python3
 """
 generate_visual_timeline.py
 
 This script generates a visual timeline of each tracked person's activity (availability)
-for sessions recorded in the presence_tracker.db database. Each page in the resulting PDF
-corresponds to one session. The x-axis represents time (in minutes from the session start),
-and each row represents a tracked user, with available periods shown in green.
+for sessions recorded in the presence_tracker.db database. Each page in the resulting PDF corresponds
+to one session. The output files are saved in the "timelines" folder with a date-based filename.
 """
 
-import argparse
+import json
+import os
 import sqlite3
 from datetime import datetime, timedelta
+
+import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.patches as patches
 
-# Set the path to your database file
+# Set the path to your database file and params.json
 DB_FILE = "presence_tracker.db"
+PARAMS_FILE = "params.json"
 
 
 def parse_timestamp(timestamp_str):
     """
     Parse a timestamp string to a datetime object.
-    Assumes ISO8601 format; adjust if needed.
     """
     try:
-        # Replace "T" with a space if necessary.
         timestamp_str = timestamp_str.replace("T", " ")
         return datetime.fromisoformat(timestamp_str)
     except Exception as exc:
@@ -36,14 +35,12 @@ def parse_timestamp(timestamp_str):
 def get_tracked_users(conn):
     """
     Retrieve users from the database.
-    Assumes there is a table named "User" with columns "id", "mail", and "display_name".
     """
     users = {}
     cursor = conn.cursor()
     cursor.execute("SELECT id, mail, display_name FROM User")
     for row in cursor.fetchall():
         user_id = row[0]
-        # Prefer display name if available; otherwise, use email.
         name = row[2] if row[2] else row[1]
         users[user_id] = name
     return users
@@ -52,13 +49,11 @@ def get_tracked_users(conn):
 def get_sessions(conn, report_days):
     """
     Retrieve sessions from the database that started after a cutoff date.
-    Assumes a table named "Session" with columns "id", "start_time", and "end_time".
     """
     cutoff = datetime.now() - timedelta(days=report_days)
     cutoff_str = cutoff.isoformat(sep=" ", timespec="seconds")
     cursor = conn.cursor()
-    cursor.execute("SELECT id, start_time, end_time FROM Session WHERE start_time >= ? ORDER BY start_time ASC",
-                   (cutoff_str,))
+    cursor.execute("SELECT id, start_time, end_time FROM Session WHERE start_time >= ? ORDER BY start_time ASC", (cutoff_str,))
     sessions = cursor.fetchall()
     return sessions
 
@@ -66,7 +61,6 @@ def get_sessions(conn, report_days):
 def get_presence_for_session(conn, session_id):
     """
     Retrieve presence records for a session.
-    Assumes a table named "Presence" with columns "session_id", "user_id", "start_time", "end_time".
     """
     cursor = conn.cursor()
     cursor.execute("""SELECT user_id, start_time, end_time FROM Presence WHERE session_id = ? ORDER BY start_time ASC""", (session_id,))
@@ -77,9 +71,6 @@ def get_presence_for_session(conn, session_id):
 def plot_session_timeline(session, presences, users):
     """
     Create a timeline plot for a given session.
-    - session: tuple (session_id, start_time, end_time)
-    - presences: list of tuples (user, start_time, end_time)
-    - users: dict mapping user id to display name.
     """
     session_id, session_start_str, session_end_str = session
     session_start = parse_timestamp(session_start_str)
@@ -89,15 +80,10 @@ def plot_session_timeline(session, presences, users):
 
     session_duration_minutes = (session_end - session_start).total_seconds() / 60
 
-    # Determine the list of tracked user ids that have any presence in this session
     tracked_user_ids = set([r[0] for r in presences])
-    # If a user is tracked but did not have any recorded presence in this session,
-    # you may want to include them with an entirely unavailable timeline.
-    # For now, we include only those with some presence records.
     tracked_user_ids = list(tracked_user_ids)
     tracked_user_ids.sort()
 
-    # Create a mapping of user id -> list of presence segments (start, end in minutes from session_start)
     user_segments = {uid: [] for uid in tracked_user_ids}
     for rec in presences:
         uid, p_start_str, p_end_str = rec
@@ -105,7 +91,6 @@ def plot_session_timeline(session, presences, users):
         p_end = parse_timestamp(p_end_str)
         if p_start is None or p_end is None:
             continue
-        # Clip the presence segment to the session boundaries:
         effective_start = max(p_start, session_start)
         effective_end = min(p_end, session_end)
         if effective_end <= effective_start:
@@ -114,24 +99,25 @@ def plot_session_timeline(session, presences, users):
         duration_min = (effective_end - effective_start).total_seconds() / 60
         user_segments[uid].append((start_minute, duration_min))
 
-    # Begin plotting
     fig, ax = plt.subplots(figsize=(12, 1 + 0.5 * len(tracked_user_ids)))
 
-    # For each user, add their available segments as green rectangles.
     y_ticks = []
     y_labels = []
-    # Let row 0 be at the top, so reverse order if desired.
     for idx, uid in enumerate(tracked_user_ids):
-        y_pos = len(tracked_user_ids) - idx - 1  # so first user at top
+        y_pos = len(tracked_user_ids) - idx - 1
         y_ticks.append(y_pos + 0.5)
         name = users.get(uid, f"User {uid}")
         y_labels.append(name)
-        # Draw each available segment as a rectangle:
+
+        # Draw the entire row as unavailable (gray)
+        ax.add_patch(patches.Rectangle((0, y_pos), session_duration_minutes, 0.8, color="green"))
+
+        # Draw available segments (green)
         for (seg_start, seg_duration) in user_segments[uid]:
-            rect = patches.Rectangle((seg_start, y_pos), seg_duration, 0.8, color="green")
+            rect = patches.Rectangle((seg_start, y_pos), seg_duration, 0.8, color="gray")
             ax.add_patch(rect)
-        # Optionally, draw a horizontal line to denote the row boundary:
-        ax.hlines(y=y_pos, xmin=0, xmax=session_duration_minutes, color="gray", linewidth=0.5)
+
+        ax.hlines(y=y_pos, xmin=0, xmax=session_duration_minutes, color="white", linewidth=0.8)
 
     ax.set_xlim(0, session_duration_minutes)
     ax.set_ylim(0, len(tracked_user_ids))
@@ -145,45 +131,49 @@ def plot_session_timeline(session, presences, users):
     return fig
 
 
+def load_params():
+    """
+    Load parameters from params.json.
+    """
+    if not os.path.exists(PARAMS_FILE):
+        raise FileNotFoundError(f"Params file '{PARAMS_FILE}' not found.")
+    with open(PARAMS_FILE, "r") as f:
+        return json.load(f)
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate a visual timeline of tracked person activity per session."
-    )
-    parser.add_argument(
-        "--report_days",
-        type=int,
-        default=7,
-        help="Number of days to generate sessions for (default: 7)"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="visual_timeline.pdf",
-        help="Output filename for the generated PDF (default: visual_timeline.pdf)"
-    )
-    args = parser.parse_args()
+    # Load params.json
+    params = load_params()
+    report_days = params.get("report_days", 7)
+
+    # Prepare the output folder
+    output_dir = "timelines"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     # Connect to the database
     conn = sqlite3.connect(DB_FILE)
-    # Enable dict-like access if needed:
     conn.row_factory = sqlite3.Row
 
-    # Get tracked users from the database
+    # Get tracked users
     users = get_tracked_users(conn)
 
-    # Get sessions for the given report_days
-    sessions = get_sessions(conn, args.report_days)
+    # Get sessions
+    sessions = get_sessions(conn, report_days)
     if not sessions:
         print("No sessions found for the given report_days criteria.")
         return
 
-    # Create a multi-page PDF where each page is one session's timeline
-    with PdfPages(args.output) as pdf:
+    # Generate filenames with date range
+    earliest_date = parse_timestamp(sessions[0][1]).strftime("%Y-%m-%d")
+    latest_date = parse_timestamp(sessions[-1][1]).strftime("%Y-%m-%d")
+    output_file = os.path.join(output_dir, f"{earliest_date}_to_{latest_date}_visual_timeline.pdf")
+
+    # Create a multi-page PDF
+    with PdfPages(output_file) as pdf:
         for session in sessions:
             session_id = session[0]
-            # Query presence records for this session
             presences = get_presence_for_session(conn, session_id)
-            # Only plot if there is presence data
             if not presences:
                 continue
             fig = plot_session_timeline(session, presences, users)
@@ -193,7 +183,7 @@ def main():
                 print(f"Added timeline for session {session_id} to the PDF.")
 
     conn.close()
-    print(f"Visual timeline PDF generated as '{args.output}'.")
+    print(f"Visual timeline PDF generated as '{output_file}'.")
 
 
 if __name__ == "__main__":
