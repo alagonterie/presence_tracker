@@ -81,9 +81,9 @@ def plot_session_timeline(session, presences, users):
 
     session_duration_minutes = (session_end - session_start).total_seconds() / 60
 
-    tracked_user_ids = set([r[0] for r in presences])
-    tracked_user_ids = list(tracked_user_ids)
-    tracked_user_ids.sort()
+    # Sort usernames alphabetically
+    tracked_user_ids = list(set([r[0] for r in presences]))
+    tracked_user_ids.sort(key=lambda uid: users.get(uid, f"User {uid}").lower())
 
     user_segments = {uid: [] for uid in tracked_user_ids}
     for rec in presences:
@@ -105,46 +105,44 @@ def plot_session_timeline(session, presences, users):
     y_ticks = []
     y_labels = []
     for idx, uid in enumerate(tracked_user_ids):
+        # Reverse the order
         y_pos = len(tracked_user_ids) - idx - 1
         y_ticks.append(y_pos + 0.5)
         name = users.get(uid, f"User {uid}")
         y_labels.append(name)
 
-        # Draw the entire row as unavailable (gray)
+        # Draw the entire row as unavailable (green as base)
         ax.add_patch(patches.Rectangle((0, y_pos), session_duration_minutes, 0.8, color="green"))
 
-        # Draw available segments (gray)
+        # Draw the user-specific unavailability segments (gray)
         for (seg_start, seg_duration) in user_segments[uid]:
             rect = patches.Rectangle((seg_start, y_pos), seg_duration, 0.8, color="gray")
             ax.add_patch(rect)
 
         ax.hlines(y=y_pos, xmin=0, xmax=session_duration_minutes, color="white", linewidth=0.8)
 
-    # Customize x-axis to display hours of the day
+    # Customize x-axis to display times of the session
     total_minutes = int(session_duration_minutes)
 
-    # Find the first full hour after the session starts
+    # Find the first full hour after the session start time
     session_start_hour_minute = session_start.hour * 60 + session_start.minute
     first_tick_minutes = ceil(session_start_hour_minute / 60) * 60 - session_start_hour_minute
 
-    # Generate ticks aligned with full hours and ensure the last tick is the session end
+    # Hourly ticks and ensure the last tick matches session end
     x_ticks = list(range(first_tick_minutes, total_minutes, 60))  # Hourly ticks
-    if total_minutes not in x_ticks:  # Explicitly include the end of the session if not present
+    if total_minutes not in x_ticks:  # Explicitly include the end of the session
         x_ticks.append(total_minutes)
 
-    # Generate corresponding labels, ensuring the last one matches the session_end time
+    # Generate corresponding x-axis labels
     x_labels = [(session_start + timedelta(minutes=minute)).strftime("%H:%M") for minute in x_ticks]
+    x_ticks[-1] = total_minutes  # Ensure last tick matches session duration
+    x_labels[-1] = session_end.strftime("%H:%M")  # Ensure exact end time as label
 
-    # Ensure the final tick is always accurately labeled, e.g., "16:00"
-    x_ticks[-1] = total_minutes  # Ensure last tick matches total duration in minutes
-    x_labels[-1] = session_end.strftime("%H:%M")  # Label the exact end time
-
+    # Set axes and labels
     ax.set_xticks(x_ticks)
     ax.set_xticklabels(x_labels, rotation=45)
 
-    # Fix the x-axis limit to end exactly at 16:00 (or the session end)
-    ax.set_xlim(0, x_ticks[-1])  # Align x-axis to the last tick (no extra space after 16:00)
-
+    ax.set_xlim(0, x_ticks[-1])  # Match x-axis to end of session
     ax.set_ylim(0, len(tracked_user_ids))
     ax.set_xlabel("Time of Day")
     ax.set_yticks(y_ticks)
