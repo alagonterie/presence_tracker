@@ -362,9 +362,6 @@ class PresenceTracker:
             self.logger.info("All users were unavailable for the scheduled tracking time")
         else:
             for user in user_availability:
-                self.logger.info(
-                    f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)"
-                )
                 severity = self.params.tracked_user_email_severity[user.mail]
                 if severity >= 3:
                     Notifier.send_stats_notification(self.params.notify_url, user.display_name, user.total_seconds)
