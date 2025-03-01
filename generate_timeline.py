@@ -111,13 +111,17 @@ def plot_session_timeline(session, presences, users):
         name = users.get(uid, f"User {uid}")
         y_labels.append(name)
 
-        # Draw the entire row as unavailable (green as base)
-        ax.add_patch(patches.Rectangle((0, y_pos), session_duration_minutes, 0.8, color="green"))
+        # If the user has no presence segments, draw a full gray bar for the session duration
+        if not user_segments[uid]:
+            ax.add_patch(patches.Rectangle((0, y_pos), session_duration_minutes, 0.8, color="gray"))
+        else:
+            # Draw the entire row as unavailable (green as base)
+            ax.add_patch(patches.Rectangle((0, y_pos), session_duration_minutes, 0.8, color="green"))
 
-        # Draw the user-specific unavailability segments (gray)
-        for (seg_start, seg_duration) in user_segments[uid]:
-            rect = patches.Rectangle((seg_start, y_pos), seg_duration, 0.8, color="gray")
-            ax.add_patch(rect)
+            # Draw the user-specific unavailability segments (gray)
+            for (seg_start, seg_duration) in user_segments[uid]:
+                rect = patches.Rectangle((seg_start, y_pos), seg_duration, 0.8, color="gray")
+                ax.add_patch(rect)
 
         ax.hlines(y=y_pos, xmin=0, xmax=session_duration_minutes, color="white", linewidth=0.8)
 
