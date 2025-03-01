@@ -7,8 +7,9 @@ from os import access, R_OK, makedirs
 from os.path import isfile, exists
 from re import compile, match
 from sys import argv
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 
+import requests
 # noinspection PyPackageRequirements
 from azure.identity import InteractiveBrowserCredential, TokenCachePersistenceOptions
 from colorlog import ColoredFormatter
@@ -26,6 +27,7 @@ _APP_NAME = "presence_tracker"
 class Params:
     _DEFAULT_PARAMS_FILE = "params.json"
 
+    _DEFAULT_NOTIFY_URL = ""
     _DEFAULT_AUTHORITY = "https://login.microsoftonline.com"
     _DEFAULT_AZURE_CLIENT_ID = "00000000-0000-0000-0000-000000000000"
     _DEFAULT_LOGIN_USERNAME = None
@@ -35,6 +37,7 @@ class Params:
     _DEFAULT_TRACKED_USER_EMAILS = []
 
     def __init__(self, params_file_path: str = _DEFAULT_PARAMS_FILE) -> None:
+        self.notify_url = self._DEFAULT_NOTIFY_URL
         self.authority = self._DEFAULT_AUTHORITY
         self.azure_client_id = self._DEFAULT_AZURE_CLIENT_ID
         self.login_username = self._DEFAULT_LOGIN_USERNAME
@@ -56,6 +59,7 @@ class Params:
         with open(params_file_path) as params_file:
             params_dict = load(params_file)
 
+        self.notify_url = params_dict.get("notify_url", self._DEFAULT_NOTIFY_URL)
         self.authority = params_dict.get("authority", self._DEFAULT_AUTHORITY)
         self.azure_client_id = params_dict.get("azure_client_id", self._DEFAULT_AZURE_CLIENT_ID)
         self.login_username = params_dict.get("login_username", self._DEFAULT_LOGIN_USERNAME)
@@ -126,6 +130,35 @@ class DbPresence(DbBase):
 
     class Meta:
         db_table = "presence"
+
+
+class Notifier:
+    @staticmethod
+    def send_presence_notification(notify_url: str, display_name: str, unavailable_seconds: int) -> None:
+        payload = {
+            "title": f"{display_name} was Away!",
+            "message": f"{display_name} was unavailable for {round(unavailable_seconds / 60, 2)} minute(s)!"
+        }
+        try:
+            Notifier._send_notification(notify_url, payload)
+        except requests.RequestException:
+            pass
+
+    @staticmethod
+    def send_stats_notification(notify_url: str, display_name: str, unavailable_seconds: int) -> None:
+        payload = {
+            "title": f"{display_name} Session Stats",
+            "message": f"{display_name} total unavailability was {round(unavailable_seconds / 60, 2)} minute(s)"
+        }
+        try:
+            Notifier._send_notification(notify_url, payload)
+        except requests.RequestException:
+            pass
+
+    @staticmethod
+    def _send_notification(notify_url: str, payload: dict[str, Any]):
+        response = requests.post(notify_url, json=payload, timeout=10)
+        response.raise_for_status()
 
 
 class Repository:
@@ -332,6 +365,11 @@ class PresenceTracker:
                 self.logger.info(
                     f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)"
                 )
+                severity = self.params.tracked_user_email_severity[user.mail]
+                if severity >= 3:
+                    Notifier.send_stats_notification(self.params.notify_url, user.display_name, user.total_seconds)
+
+                self.logger.info(f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)")
 
     def _track_individual_user(self, presence: Presence, dt_initial: Optional[datetime]) -> None:
         db_user = Repository.get_user(presence.id)
@@ -360,10 +398,15 @@ class PresenceTracker:
     def _end_unavailability_presence(self, user_id: str, dt_start: datetime, dt_end: datetime, log: Callable) -> None:
         str_start, str_end = self._format_time(dt_start), self._format_time(dt_end)
 
+        user = Repository.get_user(user_id)
         if str_start != str_end:
-            log(f"{Repository.get_user(user_id).display_name} was unavailable from {str_start} to {str_end}")
+            log(f"{user.display_name} was unavailable from {str_start} to {str_end}")
 
+        severity = self.params.tracked_user_email_severity[user.mail]
         duration_seconds = int((dt_end - dt_start).total_seconds())
+        if severity >= 3 and round(duration_seconds / 60, 2) > 60:
+            Notifier.send_presence_notification(self.params.notify_url, user.display_name, duration_seconds)
+
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 
     async def cleanup_async(self):
