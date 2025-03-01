@@ -1,163 +1,183 @@
 # Presence Tracker
 
-## Description
+## Overview
 
-A simple Python-based application designed to track the presence of specified users over Microsoft Graph API. It authenticates via Azure Active Directory, and it has
-specific use cases in tracking the availability status of users, mostly for productivity, team management, and research.
+**Presence Tracker** is a Python-based tool designed to monitor the online presence of a predefined set of users on specific platforms (e.g., via Azure or
+Microsoft Graph). It tracks user availability, logs session data, compiles usage statistics, and sends notifications or reports as necessary.
 
-## Dependencies
+The project leverages database models, APIs, user management, and reporting/visualization to provide insights about user availability within a defined time
+period. It also supports exporting tracked data into easy-to-read reports or timelines.
 
-This application is written in `Python 3.12.2` and uses the following libraries/packages:
+## Features
 
-- `azure.identity`
-- `msgraph`
-- `peewee`
-- `colorlog`
+1. **User Tracking**
 
-Please make sure to have installed the correct version of each dependency to avoid any errors.
+- Monitor the presence of users (tracked via email addresses).
+- Logs user session start, session end, and duration of availability.
 
-## Configuration
+2. **Notifications**
 
-In the `params.json` file, you can specify the configuration details like **authority**, **azure_client_id**, **login_username**, **ping_seconds**, **start_hour**, **end_hour**,
-and a list of **tracked_user_emails**.
-The format should be like this:
+- Sends presence notifications as sessions start/end.
+- Allows configuration of notification URLs for external integrations.
 
-```json
-{
-  "authority": "<authority>",
-  "azure_client_id": "<azure_client_id>",
-  "login_username": "<login_username>",
-  "ping_seconds": <ping_seconds>,
-  "start_hour": <start_hour>,
-  "end_hour": <end_hour>,
-  "tracked_user_emails": [<tracked_user_emails>],
-  "report_days": <report_days>
-}
+3. **Database Model**
+
+- Structured database schema to store users, sessions, and presence data using **Peewee ORM**.
+
+4. **Customizable Parameters**
+
+- Custom tracking hours, notification settings, user emails, and more defined in `params.json`.
+
+5. **Reporting Tools**
+
+- Generate detailed and customizable reports on user activity over a number of days.
+- Export reports in formats such as CSV.
+
+6. **Visualization**
+
+- Generate timelines that visually map user sessions over time using **Matplotlib**.
+
+## Prerequisites
+
+To set up and run this project, ensure you have the following dependencies installed:
+
+### Python Requirements
+
+- Python 3.13.1 or higher
+
+### Libraries
+
+These are listed in `requirements.txt`:
+
+```plaintext
+azure-core~=1.32.0
+azure-identity~=1.15.0
+colorlog~=6.9.0
+matplotlib~=3.10.0
+msgraph-sdk~=1.20.0
+peewee~=3.17.1
+requests~=2.32.3
 ```
 
-## Configuration Parameters
+Use the following command to install requirements:
 
-In the `params.json` file, you can specify the following configuration details:
-
-- `authority` - (string) This is the authority host URL. It should be in format: `https://login.microsoftonline.com`.
-
-- `azure_client_id` - (string) This is the Azure Client ID provided by your Azure Active Directory. It is a unique identifier that is used to identify an Azure Active Directory
-  application.
-
-- `login_username` - (string) The username used for login. This should be an email address associated with the `azure_client_id` provided.
-
-- `ping_seconds` - (number) This is the frequency (in seconds) of updating user presence, a lower number means more frequent updates.
-
-- `start_hour` - (number) This sets the time (hour in 24h format) when the tracker should start tracking. For example, setting it to `9` will start the tracker at `9AM`.
-
-- `end_hour` - (number) This sets the end hour in 24h format. This serves as the cut-off for the tracker. For example, setting it to `17` means the tracker will stop at `5PM`.
-
-- `tracked_user_emails` - (array of strings) This is a list of email addresses for the users you want to track. An example can
-  be: ` ["user1@example.com", "user2@example.com", "user3@example.com"]`.
-
-- `report_days` - (number) This controls the span of time considered when running `generate_report.py`. For example, setting it to `365` results in a report of the last 365 days of tracking activity.
-
-Example `params.json`:
-
-```json
-{
-  "authority": "https://login.microsoftonline.com",
-  "azure_client_id": "your_azure_client_id",
-  "login_username": "your_username@example.com",
-  "ping_seconds": 60,
-  "start_hour": 9,
-  "end_hour": 17,
-  "tracked_user_emails": [
-    "user1@example.com",
-    "user2@example.com",
-    "user3@example.com"
-  ],
-  "report_days": 365
-}
+```bash
+pip install -r requirements.txt
 ```
 
-_**Note:** Please make sure to replace placeholders with actual values in the given example._
+## Project Structure
 
-_**Note:** All parameters should be filled out according to user requirements and guidelines provided by Microsoft Graph API and Azure Active Directory._
+- **`main.py`**:  
+  The primary entry point to run the presence tracker application. This script manages the core runtime, initializes parameters, loads the database, and begins
+  the presence tracking process.
 
-## Privacy Note
+- **`generate_report.py`**:  
+  A utility script to generate CSV files summarizing user activity within a defined reporting period. It calculates total active time and periods of
+  unavailability for each user.
 
-Remember, you should have users' consent to track their presence. Respect privacy and use the data responsibly.
+- **`generate_timeline.py`**:  
+  Generates visual timelines of user availability using **Matplotlib**. These timelines are color-coded and visually show session start, end, and other
+  statistics.
 
-## Database Setup
+- **`params.json`**:  
+  Configuration file for the tracker. It contains key parameters, such as notification URL, Azure client ID, and a list of emails to track.
 
-The application supports SQLite and the database file is named `presence_tracker.db`. The setup will be done automatically when the application is executed. It will create three
-tables:
-
-- User
-- Session
-- Presence
+- **`requirements.txt`**:  
+  Contains all Python libraries required to run the application.
 
 ## Usage
 
-To use the application:
+### 1. Configure Parameters
 
-1. Update the `params.json` with your own configuration.
-2. Run the python file `main.py`.
+Edit the `params.json` file to define:
+
+- The email addresses of tracked users.
+- Notification configurations.
+- Tracking hours, report intervals, etc.
+
+Example of `params.json`:
+
+```json
+{
+  "notify_url": "https://example.com/notify",
+  "azure_client_id": "your-client-id",
+  "login_username": "your-username@example.com",
+  "end_hour": 16,
+  "tracked_user_emails": ["email1@example.com", "+email2@example.com"],
+  "report_days": 14
+}
+```
+
+### 2. Run Presence Tracker
+
+Start tracking user presence through:
 
 ```bash
 python main.py
 ```
 
-## Output
+### 3. Generate Reports
 
-Presence status updates will be displayed in the terminal.
-
-Logs are written to `logs/`. 
-
-Presence data from each tracking session is saved to the `presence_tracker.db` SQLite database for further querying.
-
-# Generate Report Tool
-
-In addition to presence tracking, the project now includes a tool for generating reports based on the recorded data. The Report Generator is a Python script
-named `generate_report.py` that creates a CSV file with presence information for all tracked users.
-
-## Configuration
-
-`generate_report.py` reads a file named `params.json` for its configuration. The only parameter specifically required by `generate_report.py` is `report_days`. `report_days`
-represents the number of days in the past to consider when generating the report. For instance, if `report_days` is set to `365`, the Report Generator will create a report
-considering the last 365 days of tracking activity.
-
-In the `params.json` file, the `report_days` field should be filled as per your requirements:
-
-```json
-{
-  "report_days": 365
-}
-```
-
-## Usage
-
-To execute the report generation process, you simply need to run `generate_report.py`:
+Produce a report summarizing user activity over the specified period (e.g., 14 days):
 
 ```bash
 python generate_report.py
 ```
 
-This will compute the statistics for the past `report_days` and generate a report as a CSV file. The file contains aggregated data from your `presence_tracker.db` SQLite DB. The more tracking sessions over time, the better the data in this report.
+### 4. Visualize Session Timelines
 
-## Output
+Generate a visual timeline of user sessions via:
 
-`generate_report.py` generates a CSV file that contains the following presence information for all tracked users:
+```bash
+python generate_timeline.py
+```
 
-- User Name
-- User Email
-- Unavailability Percentage
-- Unavailability Minutes Daily Average
-- Unavailability Minutes Total
-- Go Unavailable Daily Frequency
+## Key Classes and Scripts
 
-## License
+### Core Classes
 
-Please refer to the terms mentioned in the [License](https://github.com/alagonterie/presence_tracker/blob/main/LICENSE) document.
+- **Params**:
+    - Handles the loading and customization of tracking parameters.
+    - Attributes: `notify_url`, `azure_client_id`, `tracked_user_emails`, etc.
 
-**Remember:** This application is provided as-is and should be used responsibly. Always get explicit consent from your team and/or organization before tracking their status.
+- **DbBase and Database Models (e.g., DbUser, DbSession, DbPresence)**:
+    - Define and manage the relational database structure and entities.
+    - Tracks users, their sessions, and their availability.
 
-## Disclaimer
+- **Notifier**:
+    - Manages the logic for sending presence and statistics notifications to the configured URL.
 
-The logs created by this project do not in any way connect to Microsoft Teams or any other platform and are strictly local to the system running the script.
+- **Repository**:
+    - Performs database operations such as adding users, retrieving sessions, and closing incomplete records.
+
+- **PresenceTracker**:
+    - The main logic for tracking user presence asynchronously.
+    - Performs actions like logging session availability and interacting with APIs.
+
+### Utility Scripts
+
+- **generate_report.py**:
+    - Contains methods to extract database data and produce CSV reports.
+
+- **generate_timeline.py**:
+    - Provides a timeline visualization of user presence using data from the database.
+
+## Dependencies
+
+This project heavily relies on:
+
+- **Azure APIs:** To fetch user presence data via `azure-identity` and `msgraph-sdk` libraries.
+- **Matplotlib:** For generating visual timelines.
+- **Peewee ORM:** For managing and interacting with a lightweight SQLite database.
+- **Requests:** For HTTP interactions like sending notifications.
+
+## Example Workflow
+
+1. Configure the desired users in `params.json`.
+2. Run the `main.py` script to track user availability across the defined hours.
+3. Produce actionable insights by running `generate_report.py` or visualizing the logs with `generate_timeline.py`.
+
+## Future Improvements
+
+- Add a web-based front end to visualize reports and timelines dynamically.
+- Support more platforms for presence tracking beyond Azure (e.g., Google Workspace).
