@@ -134,10 +134,10 @@ class DbPresence(DbBase):
 
 class Notifier:
     @staticmethod
-    def send_presence_notification(notify_url: str, display_name: str, unavailable_seconds: int) -> None:
+    def send_presence_notification(notify_url: str, display_name: str, unavailable_seconds: int, start_time: str, end_time: str) -> None:
         payload = {
             "title": f"{display_name} was Away!",
-            "message": f"{display_name} was unavailable for {round(unavailable_seconds / 60, 2)} minute(s)!"
+            "message": f"{display_name} was unavailable from {start_time} to {end_time} ({unavailable_seconds // 60} minutes)!"
         }
         try:
             Notifier._send_notification(notify_url, payload)
@@ -148,7 +148,7 @@ class Notifier:
     def send_stats_notification(notify_url: str, display_name: str, unavailable_seconds: int) -> None:
         payload = {
             "title": f"{display_name} Session Stats",
-            "message": f"{display_name} total unavailability was {round(unavailable_seconds / 60, 2)} minute(s)"
+            "message": f"{display_name} total unavailability was {unavailable_seconds // 60} minute(s)"
         }
         try:
             Notifier._send_notification(notify_url, payload)
@@ -366,7 +366,7 @@ class PresenceTracker:
                 if severity >= 3:
                     Notifier.send_stats_notification(self.params.notify_url, user.display_name, user.total_seconds)
 
-                self.logger.info(f"{user.display_name} total unavailability was {round(user.total_seconds / 60, 2)} minute(s)")
+                self.logger.info(f"{user.display_name} total unavailability was {user.total_seconds // 60} minute(s)")
 
     def _track_individual_user(self, presence: Presence, dt_initial: Optional[datetime]) -> None:
         db_user = Repository.get_user(presence.id)
@@ -401,8 +401,8 @@ class PresenceTracker:
 
         severity = self.params.tracked_user_email_severity[user.mail]
         duration_seconds = int((dt_end - dt_start).total_seconds())
-        if severity >= 3 and round(duration_seconds / 60, 2) > 60:
-            Notifier.send_presence_notification(self.params.notify_url, user.display_name, duration_seconds)
+        if severity >= 3 and (duration_seconds / 60) > 60:
+            Notifier.send_presence_notification(self.params.notify_url, user.display_name, duration_seconds, str_start, str_end)
 
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 
