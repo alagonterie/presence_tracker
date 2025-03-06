@@ -134,6 +134,19 @@ class DbPresence(DbBase):
 
 class Notifier:
     @staticmethod
+    def send_lifecycle_notification(notify_url: str, session_id: PrimaryKeyField, exception: Exception = None) -> None:
+        message = f"Session {session_id} {"Started" if not exception else "Ended Unexpectedly"}!"
+        if not exception:
+            payload = {"message": message}
+        else:
+            payload = {"title": message, "message": str(exception)}
+
+        try:
+            Notifier._send_notification(notify_url, payload)
+        except requests.RequestException:
+            pass
+
+    @staticmethod
     def send_presence_notification(notify_url: str, display_name: str, unavailable_seconds: int, start_time: str, end_time: str) -> None:
         payload = {
             "title": f"{display_name} was Away!",
@@ -284,7 +297,11 @@ class PresenceTracker:
 
         self.session = Repository.start_session()
         self.logger.info(f"Presence tracker started, session id: {self.session.id}")
-        await self._track_until_scheduled_end_time_async(end_dt)
+        Notifier.send_lifecycle_notification(self.params.notify_url, self.session.id)
+        try:
+            await self._track_until_scheduled_end_time_async(end_dt)
+        except Exception as e:
+            Notifier.send_lifecycle_notification(self.params.notify_url, self.session.id, e)
 
         self._end_of_scheduled_time_cleanup(end_dt)
         self._print_presence_statistics(start_dt, end_dt)
