@@ -1,4 +1,5 @@
 from asyncio import sleep, run
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date
 from json import load
 from logging import INFO, DEBUG, getLogger, StreamHandler, Logger, Formatter
@@ -27,7 +28,8 @@ _APP_NAME = "presence_tracker"
 class Params:
     _DEFAULT_PARAMS_FILE = "params.json"
 
-    _DEFAULT_NOTIFY_URL = ""
+    _DEFAULT_GOTIFY_URL = ""
+    _DEFAULT_GOTIFY_APP_TOKENS = []
     _DEFAULT_AUTHORITY = "https://login.microsoftonline.com"
     _DEFAULT_AZURE_CLIENT_ID = "00000000-0000-0000-0000-000000000000"
     _DEFAULT_LOGIN_USERNAME = None
@@ -37,7 +39,8 @@ class Params:
     _DEFAULT_TRACKED_USER_EMAILS = []
 
     def __init__(self, params_file_path: str = _DEFAULT_PARAMS_FILE) -> None:
-        self.notify_url = self._DEFAULT_NOTIFY_URL
+        self.gotify_url = self._DEFAULT_GOTIFY_URL
+        self.gotify_app_tokens = self._DEFAULT_GOTIFY_APP_TOKENS
         self.authority = self._DEFAULT_AUTHORITY
         self.azure_client_id = self._DEFAULT_AZURE_CLIENT_ID
         self.login_username = self._DEFAULT_LOGIN_USERNAME
@@ -59,7 +62,8 @@ class Params:
         with open(params_file_path) as params_file:
             params_dict = load(params_file)
 
-        self.notify_url = params_dict.get("notify_url", self._DEFAULT_NOTIFY_URL)
+        self.gotify_url = params_dict.get("gotify_url", self._DEFAULT_GOTIFY_URL)
+        self.gotify_app_tokens = params_dict.get("gotify_app_tokens", self._DEFAULT_GOTIFY_APP_TOKENS)
         self.authority = params_dict.get("authority", self._DEFAULT_AUTHORITY)
         self.azure_client_id = params_dict.get("azure_client_id", self._DEFAULT_AZURE_CLIENT_ID)
         self.login_username = params_dict.get("login_username", self._DEFAULT_LOGIN_USERNAME)
@@ -134,7 +138,7 @@ class DbPresence(DbBase):
 
 class Notifier:
     @staticmethod
-    def send_lifecycle_notification(notify_url: str, session_id: PrimaryKeyField, exception: Exception = None) -> None:
+    def send_lifecycle_notifications(gotify_url: str, gotify_app_tokens: list[str], session_id: PrimaryKeyField, exception: Exception = None) -> None:
         message = f"Session {session_id} {"Started" if not exception else "Ended Unexpectedly"}!"
         if not exception:
             payload = {"message": message}
@@ -142,36 +146,43 @@ class Notifier:
             payload = {"title": message, "message": str(exception)}
 
         try:
-            Notifier._send_notification(notify_url, payload)
+            Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
         except requests.RequestException:
             pass
 
     @staticmethod
-    def send_presence_notification(notify_url: str, display_name: str, unavailable_seconds: int, start_time: str, end_time: str) -> None:
+    def send_presence_notifications(gotify_url: str, gotify_app_tokens: list[str], display_name: str, unavailable_seconds: int, start_time: str, end_time: str) -> None:
         payload = {
             "title": f"{display_name} was Away!",
             "message": f"{display_name} was unavailable from {start_time} to {end_time} ({unavailable_seconds // 60} minutes)!"
         }
         try:
-            Notifier._send_notification(notify_url, payload)
+            Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
         except requests.RequestException:
             pass
 
     @staticmethod
-    def send_stats_notification(notify_url: str, display_name: str, unavailable_seconds: int) -> None:
+    def send_stats_notifications(gotify_url: str, gotify_app_tokens: list[str], display_name: str, unavailable_seconds: int) -> None:
         payload = {
             "title": f"{display_name} Session Stats",
             "message": f"{display_name} total unavailability was {unavailable_seconds // 60} minute(s)"
         }
         try:
-            Notifier._send_notification(notify_url, payload)
+            Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
         except requests.RequestException:
             pass
 
     @staticmethod
-    def _send_notification(notify_url: str, payload: dict[str, Any]):
-        response = requests.post(notify_url, json=payload, timeout=10)
-        response.raise_for_status()
+    def _send_notifications(gotify_url: str, gotify_app_tokens: list[str], payload: dict[str, Any]):
+        def send_request(app_token: str) -> None:
+            try:
+                response = requests.post(f"{gotify_url}/message?token={app_token}", json=payload, timeout=10)
+                response.raise_for_status()
+            except requests.RequestException:
+                pass
+
+        with ThreadPoolExecutor() as executor:
+            executor.map(send_request, gotify_app_tokens)
 
 
 class Repository:
@@ -297,11 +308,11 @@ class PresenceTracker:
 
         self.session = Repository.start_session()
         self.logger.info(f"Presence tracker started, session id: {self.session.id}")
-        Notifier.send_lifecycle_notification(self.params.notify_url, self.session.id)
+        Notifier.send_lifecycle_notifications(self.params.gotify_url, self.params.gotify_app_tokens, self.session.id)
         try:
             await self._track_until_scheduled_end_time_async(end_dt)
         except Exception as e:
-            Notifier.send_lifecycle_notification(self.params.notify_url, self.session.id, e)
+            Notifier.send_lifecycle_notifications(self.params.gotify_url, self.params.gotify_app_tokens, self.session.id, e)
 
         self._end_of_scheduled_time_cleanup(end_dt)
         self._print_presence_statistics(start_dt, end_dt)
@@ -381,7 +392,7 @@ class PresenceTracker:
             for user in user_availability:
                 severity = self.params.tracked_user_email_severity[user.mail]
                 if severity >= 3:
-                    Notifier.send_stats_notification(self.params.notify_url, user.display_name, user.total_seconds)
+                    Notifier.send_stats_notifications(self.params.gotify_url, self.params.gotify_app_tokens, user.display_name, user.total_seconds)
 
                 self.logger.info(f"{user.display_name} total unavailability was {user.total_seconds // 60} minute(s)")
 
@@ -419,7 +430,7 @@ class PresenceTracker:
         severity = self.params.tracked_user_email_severity[user.mail]
         duration_seconds = int((dt_end - dt_start).total_seconds())
         if severity >= 3 and (duration_seconds / 60) > 60:
-            Notifier.send_presence_notification(self.params.notify_url, user.display_name, duration_seconds, str_start, str_end)
+            Notifier.send_presence_notifications(self.params.gotify_url, self.params.gotify_app_tokens, user.display_name, duration_seconds, str_start, str_end)
 
         Repository.update_presence_end_time_and_duration(user_id, dt_end, duration_seconds)
 

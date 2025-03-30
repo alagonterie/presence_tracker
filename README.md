@@ -99,7 +99,8 @@ Example of `params.json`:
 
 ```json
 {
-  "notify_url": "https://example.com/notify",
+  "gotify_url": "https://example.com/notify",
+  "gotify_app_tokens": ["gotify-app-token-1", "gotify-app-token-2"],
   "azure_client_id": "your-client-id",
   "login_username": "your-username@example.com",
   "end_hour": 16,
@@ -138,7 +139,7 @@ python generate_timeline.py
 
 - **Params**:
     - Handles the loading and customization of tracking parameters.
-    - Attributes: `notify_url`, `azure_client_id`, `tracked_user_emails`, etc.
+    - Attributes: `gotify_url`, `azure_client_id`, `tracked_user_emails`, etc.
 
 - **DbBase and Database Models (e.g., DbUser, DbSession, DbPresence)**:
     - Define and manage the relational database structure and entities.
