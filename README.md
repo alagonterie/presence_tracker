@@ -1,184 +1,95 @@
 # Presence Tracker
 
-## Overview
-
-**Presence Tracker** is a Python-based tool designed to monitor the online presence of a predefined set of users on specific platforms (e.g., via Azure or
-Microsoft Graph). It tracks user availability, logs session data, compiles usage statistics, and sends notifications or reports as necessary.
-
-The project leverages database models, APIs, user management, and reporting/visualization to provide insights about user availability within a defined time
-period. It also supports exporting tracked data into easy-to-read reports or timelines.
+Tracks Microsoft Teams presence status for specified users within defined time windows and generates reports and visual timelines.
 
 ## Features
 
-1. **User Tracking**
-
-- Monitor the presence of users (tracked via email addresses).
-- Logs user session start, session end, and duration of availability.
-
-2. **Notifications**
-
-- Sends presence notifications as sessions start/end.
-- Allows configuration of notification URLs for external integrations.
-
-3. **Database Model**
-
-- Structured database schema to store users, sessions, and presence data using **Peewee ORM**.
-
-4. **Customizable Parameters**
-
-- Custom tracking hours, notification settings, user emails, and more defined in `params.json`.
-
-5. **Reporting Tools**
-
-- Generate detailed and customizable reports on user activity over a number of days.
-- Export reports in formats such as CSV.
-
-6. **Visualization**
-
-- Generate timelines that visually map user sessions over time using **Matplotlib**.
+*   Tracks user presence (Availability: Available, Away, Offline, etc.) using Microsoft Graph API.
+*   Logs periods of unavailability (Away, Offline) to a SQLite database (`presence_tracker.db`).
+*   Configurable tracking schedule (start/end hours) and polling interval via `params.json`.
+*   Stores user information (ID, email, display name, job title).
+*   Provides optional notifications via Gotify for session start/end and significant unavailability periods.
+*   Generates CSV reports summarizing user unavailability (`generate_report.py`).
+*   Generates PDF visual timelines of user availability per session (`generate_timeline.py`).
 
 ## Prerequisites
 
-To set up and run this project, ensure you have the following dependencies installed:
+*   Python 3.x
+*   Azure AD Application Registration:
+    *   An Azure AD application with the `Presence.Read` permission granted (delegated).
+    *   Your Azure Client ID.
+*   (Optional) Gotify server URL and application tokens for notifications.
 
-### Python Requirements
+## Installation
 
-- Python 3.13.1 or higher
+1.  **Clone the repository (or download the files).**
+2.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-### Libraries
+## Configuration
 
-These are listed in `requirements.txt`:
+Modify the `params.json` file to configure the tracker:
 
-```plaintext
-azure-core~=1.32.0
-azure-identity~=1.15.0
-colorlog~=6.9.0
-matplotlib~=3.10.0
-msgraph-sdk~=1.20.0
-peewee~=3.17.1
-requests~=2.32.3
-```
-
-Use the following command to install requirements:
-
-```bash
-pip install -r requirements.txt
-```
-
-## Project Structure
-
-- **`main.py`**:  
-  The primary entry point to run the presence tracker application. This script manages the core runtime, initializes parameters, loads the database, and begins
-  the presence tracking process.
-
-- **`generate_report.py`**:  
-  A utility script to generate CSV files summarizing user activity within a defined reporting period. It calculates total active time and periods of
-  unavailability for each user.
-
-- **`generate_timeline.py`**:  
-  Generates visual timelines of user availability using **Matplotlib**. These timelines are color-coded and visually show session start, end, and other
-  statistics.
-
-- **`params.json`**:  
-  Configuration file for the tracker. It contains key parameters, such as notification URL, Azure client ID, and a list of emails to track.
-
-- **`requirements.txt`**:  
-  Contains all Python libraries required to run the application.
+*   `gotify_url`: (Optional) URL of your Gotify server.
+*   `gotify_app_tokens`: (Optional) List of Gotify application tokens for sending notifications.
+*   `authority`: (Optional) Microsoft login authority URL (default is usually fine).
+*   `azure_client_id`: **Required.** Your Azure AD application's Client ID.
+*   `login_username`: (Optional) The username (email) to pre-fill during the interactive login flow.
+*   `ping_seconds`: Interval (in seconds) for checking presence status.
+*   `start_hour`: Hour (24-hour format) to start tracking (e.g., 9 for 9 AM).
+*   `end_hour`: Hour (24-hour format) to stop tracking (e.g., 17 for 5 PM).
+*   `tracked_user_emails`: **Required.** List of user emails to track.
+    *   Prefix emails with `+` characters to increase notification/logging severity (up to `+++`).
+*   `report_days`: Number of past days to include in reports/timelines (used by generation scripts).
 
 ## Usage
 
-### 1. Configure Parameters
+1.  **Run the tracker:**
+    ```bash
+    python main.py [optional_path_to_params.json]
+    ```
+    *   The first time you run it, you will be prompted to log in via a browser to grant the application permission. Subsequent runs may use cached credentials.
+    *   The script will run between the configured `start_hour` and `end_hour`.
+    *   Presence data is logged to `presence_tracker.db`.
+    *   Logs are stored in the `logs/` directory.
 
-Edit the `params.json` file to define:
+2.  **Generate Reports:**
+    ```bash
+    python generate_report.py
+    ```
+    *   Reads data from `presence_tracker.db`.
+    *   Uses the `report_days` parameter from `params.json`.
+    *   Creates a CSV file in the `reports/` directory (e.g., `YYYY-MM-DD-YYYY-MM-DD_presence_report.csv`).
 
-- The email addresses of tracked users.
-- Notification configurations.
-- Tracking hours, report intervals, etc.
+3.  **Generate Timelines:**
+    ```bash
+    python generate_timeline.py
+    ```
+    *   Reads data from `presence_tracker.db`.
+    *   Uses the `report_days` parameter from `params.json`.
+    *   Creates a multi-page PDF file in the `timelines/` directory (e.g., `YYYY-MM-DD_to_YYYY-MM-DD_visual_timeline.pdf`), with each page representing a tracking session.
 
-Example of `params.json`:
+## Database Schema (`presence_tracker.db`)
 
-```json
-{
-  "gotify_url": "https://example.com/notify",
-  "gotify_app_tokens": ["gotify-app-token-1", "gotify-app-token-2"],
-  "azure_client_id": "your-client-id",
-  "login_username": "your-username@example.com",
-  "end_hour": 16,
-  "tracked_user_emails": ["email1@example.com", "+email2@example.com"],
-  "report_days": 14
-}
-```
-
-### 2. Run Presence Tracker
-
-Start tracking user presence through:
-
-```bash
-python main.py
-```
-
-### 3. Generate Reports
-
-Produce a report summarizing user activity over the specified period (e.g., 14 days):
-
-```bash
-python generate_report.py
-```
-
-### 4. Visualize Session Timelines
-
-Generate a visual timeline of user sessions via:
-
-```bash
-python generate_timeline.py
-```
-
-## Key Classes and Scripts
-
-### Core Classes
-
-- **Params**:
-    - Handles the loading and customization of tracking parameters.
-    - Attributes: `gotify_url`, `azure_client_id`, `tracked_user_emails`, etc.
-
-- **DbBase and Database Models (e.g., DbUser, DbSession, DbPresence)**:
-    - Define and manage the relational database structure and entities.
-    - Tracks users, their sessions, and their availability.
-
-- **Notifier**:
-    - Manages the logic for sending presence and statistics notifications to the configured URL.
-
-- **Repository**:
-    - Performs database operations such as adding users, retrieving sessions, and closing incomplete records.
-
-- **PresenceTracker**:
-    - The main logic for tracking user presence asynchronously.
-    - Performs actions like logging session availability and interacting with APIs.
-
-### Utility Scripts
-
-- **generate_report.py**:
-    - Contains methods to extract database data and produce CSV reports.
-
-- **generate_timeline.py**:
-    - Provides a timeline visualization of user presence using data from the database.
+*   **user**: Stores information about tracked users.
+    *   `id`: Microsoft Graph User ID (Primary Key)
+    *   `mail`: User email
+    *   `display_name`: User display name
+    *   `job_title`: User job title
+*   **session**: Represents a single run of the `main.py` script.
+    *   `id`: Auto-incrementing session ID (Primary Key)
+    *   `start_time`: Timestamp when the session started
+    *   `end_time`: Timestamp when the session ended
+*   **presence**: Records periods when a user was *not* available (e.g., Away, Offline).
+    *   `id`: Auto-incrementing presence record ID (Primary Key)
+    *   `session_id`: Foreign key linking to the `session` table
+    *   `user_id`: Foreign key linking to the `user` table
+    *   `start_time`: Timestamp when the unavailability started
+    *   `end_time`: Timestamp when the unavailability ended (or when the session ended if still unavailable)
+    *   `duration_seconds`: Calculated duration of the unavailability period in seconds
 
 ## Dependencies
 
-This project heavily relies on:
-
-- **Azure APIs:** To fetch user presence data via `azure-identity` and `msgraph-sdk` libraries.
-- **Matplotlib:** For generating visual timelines.
-- **Peewee ORM:** For managing and interacting with a lightweight SQLite database.
-- **Requests:** For HTTP interactions like sending notifications.
-
-## Example Workflow
-
-1. Configure the desired users in `params.json`.
-2. Run the `main.py` script to track user availability across the defined hours.
-3. Produce actionable insights by running `generate_report.py` or visualizing the logs with `generate_timeline.py`.
-
-## Future Improvements
-
-- Add a web-based front end to visualize reports and timelines dynamically.
-- Support more platforms for presence tracking beyond Azure (e.g., Google Workspace).
+See `requirements.txt`. 
