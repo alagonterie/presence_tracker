@@ -145,10 +145,7 @@ class Notifier:
         else:
             payload = {"title": message, "message": str(exception)}
 
-        try:
-            Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
-        except requests.RequestException:
-            pass
+        Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
 
     @staticmethod
     def send_presence_notifications(gotify_url: str, gotify_app_tokens: list[str], display_name: str, unavailable_seconds: int, start_time: str, end_time: str) -> None:
@@ -156,10 +153,8 @@ class Notifier:
             "title": f"{display_name} was Away!",
             "message": f"{display_name} was unavailable from {start_time} to {end_time} ({unavailable_seconds // 60} minutes)!"
         }
-        try:
-            Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
-        except requests.RequestException:
-            pass
+
+        Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
 
     @staticmethod
     def send_stats_notifications(gotify_url: str, gotify_app_tokens: list[str], display_name: str, unavailable_seconds: int) -> None:
@@ -167,10 +162,8 @@ class Notifier:
             "title": f"{display_name} Session Stats",
             "message": f"{display_name} total unavailability was {unavailable_seconds // 60} minute(s)"
         }
-        try:
-            Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
-        except requests.RequestException:
-            pass
+
+        Notifier._send_notifications(gotify_url, gotify_app_tokens, payload)
 
     @staticmethod
     def _send_notifications(gotify_url: str, gotify_app_tokens: list[str], payload: dict[str, Any]):
@@ -178,8 +171,10 @@ class Notifier:
             try:
                 response = requests.post(f"{gotify_url}/message?token={app_token}", json=payload, timeout=10)
                 response.raise_for_status()
-            except requests.RequestException:
-                pass
+            except requests.RequestException as e:
+                print(f"Failed to send notification to Gotify: {e}")
+            except Exception as e:
+                print(f"Unexpected error sending notification: {e}")
 
         with ThreadPoolExecutor() as executor:
             executor.map(send_request, gotify_app_tokens)
